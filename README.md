@@ -33,8 +33,8 @@ deepseek-plugins/
 
 ## 首次使用
 
-1. 把根 `package.json` 的 `repository.url` 改成你的仓库地址（市场索引的 `source.url`
-   由它生成，占位地址会让安装落到错误的仓库），顺手改 `name` 与 `description`。
+1. 根 `package.json` 的 `repository.url` 已指向本仓库；改名或 fork 时改这一行——市场索引的
+   `source.url` 与 `repository` 都由它生成，写错会让安装落到别的仓库。
 2. `pnpm install`。
 3. `cp -r packages/_template packages/dsh-<name>`，按模板 README 改名，再
    `pnpm install` 让新包进入 lockfile。
@@ -123,7 +123,7 @@ pnpm --filter dsh-my-thing publish
 **2. git 直装**
 
 ```sh
-dsh plugin --profile dev add 'git+https://github.com/you/deepseek-plugins.git#<sha>&path:/packages/dsh-my-thing'
+dsh plugin --profile dev add 'git+https://github.com/mxn404/deepseek-plugins.git#<sha>&path:/packages/dsh-my-thing'
 ```
 
 git 安装拉的是源码，`prepack` 不会运行：这条路线要求该插件包自带

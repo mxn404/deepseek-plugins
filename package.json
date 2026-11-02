@@ -10,7 +10,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/you/deepseek-plugins.git"
+    "url": "git+https://github.com/mxn404/deepseek-plugins.git"
   },
   "scripts": {
     "build": "node scripts/build.ts",
