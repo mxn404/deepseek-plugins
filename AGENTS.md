@@ -53,3 +53,17 @@ pnpm market         # 生成 site/index.json：已发布包走 npm 源，未发�
 2. 新插件能在 dev profile 里 `--dump-config` 看到自己的层。
 3. 若改了 `package.json` 的 `dsh.bundle` / `dsh.client` / `exports`，同步更新
    `scripts/build.ts` 的校验预期与 README 的目录说明。
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live in this repo's GitHub Issues, driven by the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles keep their default label strings. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one root `GLOSSARY.md` plus `docs/adr/`. See `docs/agents/domain.md`.
