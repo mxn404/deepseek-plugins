@@ -15,6 +15,11 @@ node_modules/
 site/index.json
 site/icons/
 
+# Local scratch directories used when verifying installs and clones.
+.market-test*/
+.verify-*/
+.test-home/
+
 # Tooling output.
 coverage/
 *.log
