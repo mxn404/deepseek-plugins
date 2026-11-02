@@ -190,10 +190,11 @@ async function fetchPackument(name, registry, warnings) {
  * @param name - the package name.
  * @param packument - the registry document.
  * @param registry - registry base URL, recorded only when it is not the default.
+ * @param repoUrl - this repository's https URL, compared with the published repository.
  * @param warnings - receives per-version problems.
  * @returns the version entries, newest first.
  */
-function publishedVersions(name, packument, registry, warnings) {
+function publishedVersions(name, packument, registry, repoUrl, warnings) {
   const versions = packument?.versions
   if (versions === null || typeof versions !== 'object') {
     warnings.push(`${name}: registry document has no versions; using the git source`)
@@ -223,6 +224,20 @@ function publishedVersions(name, packument, registry, warnings) {
   entries.sort((left, right) => compareSemver(right.version, left.version))
   if (entries.length > 0 && entries.every(entry => entry.engines === undefined)) {
     warnings.push(`${name}: no published version declares engines.dsh, so the market shows no compatibility range`)
+  }
+  // A name the registry already carries may belong to someone else; the market
+  // would then send users to their package. Surface it instead of guessing.
+  if (entries.length > 0) {
+    const newest = versions[entries[0].version]
+    let declared
+    try {
+      declared = repositoryUrl(newest?.repository)
+    } catch {
+      declared = undefined
+    }
+    if (declared !== undefined && declared !== repoUrl) {
+      warnings.push(`${name}: the newest published version names repository ${declared}, not ${repoUrl}; the registry name may belong to another project`)
+    }
   }
   return entries
 }
@@ -356,7 +371,7 @@ for (const pkg of packages) {
     if (packument === null) {
       origin = 'git (not on the registry)'
     } else if (packument !== undefined) {
-      versions = publishedVersions(name, packument, registry, warnings)
+      versions = publishedVersions(name, packument, registry, repoUrl, warnings)
       origin = versions.length > 0 ? `npm (${versions.length} version(s))` : 'git (no bundle version on the registry)'
     } else {
       origin = 'git (registry unavailable)'
