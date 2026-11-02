@@ -140,7 +140,7 @@ pnpm market --title "My plugins"
 
 产出 `site/index.json` + `site/icons/`。把它放到任意静态主机（`.github/workflows/market.yml`
 已经把它部署到 GitHub Pages），然后在 Web GUI 的**发现**页添加该 `index.json` 的 URL。
-索引指向当前 HEAD 的 commit，所以先生成、后部署；打 tag 时 CI 会自动重跑。
+索引指向当前 HEAD 的 commit，所以只发布「已在 HEAD 且没有未提交改动」的包；其余包会被跳过并列出原因。打 tag 时 CI 会自动重跑。
 
 ### 版本与标签
 

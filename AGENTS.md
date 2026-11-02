@@ -32,7 +32,7 @@ pnpm typecheck      # 各包 tsc --noEmit
 pnpm build          # 构建全部包 + 校验 exports / bundle patch 文件存在
 pnpm test           # 各包 vitest run
 pnpm check          # typecheck + build + test
-pnpm market         # 生成 site/index.json（需要已提交，索引指向 HEAD）
+pnpm market         # 生成 site/index.json（只发布已提交且无未提交改动的插件）
 ```
 
 ## 发布
