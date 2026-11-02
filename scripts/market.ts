@@ -68,6 +68,14 @@ function repositoryUrl(value) {
   return cleaned
 }
 
+/** Whether a package directory matches HEAD: present there and unchanged in the working tree. */
+function headState(dir) {
+  const present = spawnSync("git", ["cat-file", "-e", `HEAD:${dir}/package.json`], { cwd: REPO_ROOT })
+  if (present.status !== 0) return "absent"
+  const changed = spawnSync("git", ["status", "--porcelain", "--", dir], { cwd: REPO_ROOT, encoding: "utf8" })
+  return (changed.stdout ?? "").trim() === "" ? "clean" : "dirty"
+}
+
 /** Read `meta.title` / `meta.description` from one locale file, if it exists. */
 async function localeMeta(dir, language) {
   const path = join(dir, 'locale', `${language}.json`)
@@ -169,6 +177,13 @@ for (const pkg of packages) {
     skipped.push(`${name}: no version`)
     continue
   }
+  // The index pins HEAD, so an uncommitted package would publish a version and
+  // path that the pinned commit does not contain, and the install would fail.
+  const state = headState(pkg.dir)
+  if (state !== 'clean') {
+    skipped.push(`${name}: ${state === 'absent' ? 'not committed at HEAD' : 'uncommitted changes'}`)
+    continue
+  }
   for (const patch of bundlePatchFiles(manifest)) {
     if (!existsSync(join(pkg.path, patch))) warnings.push(`${name}: bundle patch ${patch} does not exist`)
   }
@@ -204,8 +219,12 @@ for (const pkg of packages) {
 
 if (plugins.length === 0) {
   console.error('✗ no installable bundle packages found')
+  if (skipped.length > 0) {
+    console.error('skipped:')
+    for (const line of skipped) console.error(`  · ${line}`)
+  }
   console.error('  packages/_template is a copy-ready skeleton, not a published plugin.')
-  console.error('  Copy it to packages/dsh-<name>, fill in the manifest, then rerun this script.')
+  console.error('  Copy it to packages/dsh-<name>, commit it, then rerun this script.')
   process.exit(1)
 }
 
