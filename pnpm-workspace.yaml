@@ -6,4 +6,3 @@
 # To keep a helper package out of the market, leave it without `dsh.bundle`.
 packages:
   - packages/*
-  - tooling

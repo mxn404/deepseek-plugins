@@ -1,0 +1,5 @@
+packages:
+  - .
+allowBuilds:
+  "@dsh-plugins/template": true
+  "@dsh-plugins/template@git+file:///home/ubuntu/code/deepseek-plugins#838fcfca5ec52552ada52a07788e2f42198ed2de&path:/packages/_template": true

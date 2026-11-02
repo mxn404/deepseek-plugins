@@ -9,7 +9,7 @@ profile、能否出现在市场索引里；改目录编排前先读 README.md �
   `dsh.bundle` 时会只列根包，忽略其他所有插件。
 - 一个可安装插件 = `packages/<name>/` 下一个声明 `dsh.bundle` 的包，配套
   `cordis.patch.yml`。没有 `dsh.bundle` 的包是普通库，不会进入市场。
-- `tooling/` 只放构建期配置（tsdown 预设），**禁止 runtime import**；它不随插件发布。
+- `tooling/` 只放构建期配置（tsdown 预设），**禁止 runtime import**，并且**不是 workspace 包**：插件包用相对路径 `../../tooling/index.mjs` 引用。写成 `workspace:*` 依赖会让 git 安装的嵌套 `pnpm install` 解析失败。
 - 插件之间不得互相 `workspace:` 运行时依赖：git 子目录安装时解析不到兄弟包。共享代码
   要么发布成独立普通包，要么在构建期内联。
 - 插件目录深度保持在 `packages/<name>`，不要嵌套；不要用 `test`、`tests`、`fixtures`、
@@ -39,8 +39,9 @@ pnpm market         # 生成 site/index.json（需要已提交，索引指向 HE
 
 - 版本独立，用 changesets；标签格式 `<包名>@<版本>`，不要用 `vX.Y.Z`（市场会当成
   适用于所有包）。
-- npm 发布靠 `prepack` 跑 tsdown；git 直装靠插件包自己的 `prepare`，两者不能互相
-  替代。`files` 必须包含 `lib`、`cordis.patch.yml`、`locale`、`icon.svg`。
+- 每个插件包必须自带 `"prepare": "tsdown"`：npm 打包前与 git/市场安装后都靠它产出
+  `lib/`。pnpm ≥10 会拦 git 依赖的构建，安装时由 dsh 的 `allowBuilds` 审批放行。
+  `files` 必须包含 `lib`、`cordis.patch.yml`、`locale`、`icon.svg`。
 - 浏览器半的 bundle 必须是 `window.__ModuleLoader__.load({ id, factory })` 形状，且
   `react` / `react-dom` / `@deepseek-ai/*` 保持 external，由页面模块表提供。
 

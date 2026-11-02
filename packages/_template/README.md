@@ -51,6 +51,8 @@ pnpm build      # 构建全部包并校验 exports / bundle patch 文件确实�
 
 ## 发布
 
-- **npm**：`prepack` 已经挂在 `tsdown` 上，`pnpm --filter <包名> publish` 会先构建。
-- **git 直装**：给这个包加 `"prepare": "tsdown"`。git 安装拉源码后只跑 `prepare`，
-  `prepack` 不会触发；不加的话装到的是没有 `lib/` 的源码，插件加载会失败。
+- **npm**：`prepare` 会在打包前跑 tsdown，`pnpm --filter <包名> publish` 自带构建产物。
+- **git 直装 / 市场安装**：同一条 `prepare` 也会在 git 安装后执行，缺了它装到的是没有
+  `lib/` 的源码。pnpm ≥10 会拦下这次构建，安装时按 dsh 的提示在 `allowBuilds` 放行即可。
+- 构建预设用相对路径 `../../tooling/index.mjs` 引用：git 安装时整个仓库树都在，但这个
+  包不能依赖 `workspace:*` 的兄弟包，pnpm 的嵌套安装解析不了它。

@@ -117,8 +117,8 @@ link 安装会保留插件自己的 `node_modules`，但消费的仍是构建产
 pnpm --filter dsh-my-thing publish
 ```
 
-`prepack` 会在 `pnpm publish` / `pnpm pack` 前跑 tsdown，用户 `dsh plugin add dsh-my-thing`
-装到的是预构建产物，不需要任何构建授权。
+`prepare` 会在 npm 打包前跑 tsdown，用户 `dsh plugin add dsh-my-thing` 装到的是预构建
+产物，不需要任何构建授权。
 
 **2. git 直装**
 
@@ -126,10 +126,11 @@ pnpm --filter dsh-my-thing publish
 dsh plugin --profile dev add 'git+https://github.com/mxn404/deepseek-plugins.git#<sha>&path:/packages/dsh-my-thing'
 ```
 
-git 安装拉的是源码，`prepack` 不会运行：这条路线要求该插件包自带
-`"prepare": "tsdown"`，pnpm 会在 `git` 安装后执行它。pnpm ≥10 还需要用户显式授权
-（profile 的 `pnpm-workspace.yaml` 里加 `allowBuilds: { dsh-my-thing: true }`）。锁定
-commit，别用分支名。
+git 安装拉的是源码，pnpm 会先跑一次嵌套 `pnpm install`、再执行插件包的
+`"prepare": "tsdown"`。pnpm ≥10 会拦下这次构建，需要用户放行：在 dsh GUI 里安装时，
+插件管理器会把被拦的构建写进 profile 的 `allowBuilds` 待办，确认后重试即可；手工安装
+则自己往 profile 的 `pnpm-workspace.yaml` 加 `allowBuilds: { dsh-my-thing: true }`。
+锁定 commit，别用分支名。
 
 **3. 市场索引**
 

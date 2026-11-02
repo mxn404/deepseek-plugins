@@ -1,5 +1,5 @@
 import { defineConfig } from 'tsdown'
-import { clientConfig, hostConfig } from '@dsh-plugins/build-config'
+import { clientConfig, hostConfig } from '../../tooling/index.mjs'
 
 /**
  * Two builds per plugin package:
