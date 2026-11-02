@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "插件模板",
+    "description": "可直接复制的 dsh 插件包骨架：宿主半、浏览器半与 profile 配置层。"
+  }
+}

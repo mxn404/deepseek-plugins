@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Plugin Template",
+    "description": "Copy-ready dsh plugin package: host half, browser half and the profile config layer."
+  }
+}

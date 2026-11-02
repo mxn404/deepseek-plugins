@@ -1,0 +1,21 @@
+# Build output. Nothing here is committed: a git-installed plugin rebuilds from
+# source through its `prepare` script, and npm installs the built tarball.
+lib/
+*.tsbuildinfo
+
+# Dependencies and local package stores.
+node_modules/
+.pnpm-store/
+
+# Local scratch caches used while scaffolding in this checkout.
+.npm-cache/
+
+# Generated market index. `pnpm market` recreates it; the deploy workflow uploads
+# it from the build job. Remove these two lines to publish the index from git.
+site/index.json
+site/icons/
+
+# Tooling output.
+coverage/
+*.log
+.DS_Store

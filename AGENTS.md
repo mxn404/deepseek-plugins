@@ -1,0 +1,52 @@
+# AGENTS.md
+
+本仓库是存放多个 dsh 插件的 pnpm workspace。下面的不变量决定插件能否被装进 dsh
+profile、能否出现在市场索引里；改目录编排前先读 README.md 的“为什么这样摆”。
+
+## 布局不变量
+
+- 根 `package.json` 只做容器：**不得声明 `dsh.bundle`**。市场生成器发现根包声明
+  `dsh.bundle` 时会只列根包，忽略其他所有插件。
+- 一个可安装插件 = `packages/<name>/` 下一个声明 `dsh.bundle` 的包，配套
+  `cordis.patch.yml`。没有 `dsh.bundle` 的包是普通库，不会进入市场。
+- `tooling/` 只放构建期配置（tsdown 预设），**禁止 runtime import**；它不随插件发布。
+- 插件之间不得互相 `workspace:` 运行时依赖：git 子目录安装时解析不到兄弟包。共享代码
+  要么发布成独立普通包，要么在构建期内联。
+- 插件目录深度保持在 `packages/<name>`，不要嵌套；不要用 `test`、`tests`、`fixtures`、
+  `example`、`examples` 命名插件目录（市场回退扫描会跳过）。
+- 需要与宿主共享实例的 `@deepseek-ai/*` 包，`peerDependencies` 与 `devDependencies`
+  双写。
+
+## 命名
+
+- 包名 `dsh-<name>`（可用 scope）；插件 id、bundle 行 `name`、客户端模块 id 保持一致。
+- bundle 行 `id` 与包名同名，用户才能按 id 覆盖该行配置。
+- 每个 bundle 包声明 `engines.dsh`。
+- `locale/en.json` 必须有 `meta.title` 与 `meta.description`；市场展示以英文为必填。
+
+## 命令
+
+```sh
+pnpm install        # 新增包后必须重跑，让 lockfile 收录
+pnpm typecheck      # 各包 tsc --noEmit
+pnpm build          # 构建全部包 + 校验 exports / bundle patch 文件存在
+pnpm test           # 各包 vitest run
+pnpm check          # typecheck + build + test
+pnpm market         # 生成 site/index.json（需要已提交，索引指向 HEAD）
+```
+
+## 发布
+
+- 版本独立，用 changesets；标签格式 `<包名>@<版本>`，不要用 `vX.Y.Z`（市场会当成
+  适用于所有包）。
+- npm 发布前 `prepare` 会跑 tsdown；`files` 必须包含 `lib`、`cordis.patch.yml`、
+  `locale`、`icon.svg`。
+- 浏览器半的 bundle 必须是 `window.__ModuleLoader__.load({ id, factory })` 形状，且
+  `react` / `react-dom` / `@deepseek-ai/*` 保持 external，由页面模块表提供。
+
+## 改动完成前
+
+1. `pnpm check` 全绿。
+2. 新插件能在 dev profile 里 `--dump-config` 看到自己的层。
+3. 若改了 `package.json` 的 `dsh.bundle` / `dsh.client` / `exports`，同步更新
+   `scripts/build.ts` 的校验预期与 README 的目录说明。

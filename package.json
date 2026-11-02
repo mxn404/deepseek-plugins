@@ -1,0 +1,22 @@
+{
+  "name": "deepseek-plugins",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A pnpm workspace that hosts several DeepSeek Harness (dsh) plugins, one bundle package per plugin.",
+  "type": "module",
+  "packageManager": "pnpm@11.28.5",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/you/deepseek-plugins.git"
+  },
+  "scripts": {
+    "build": "node scripts/build.ts",
+    "typecheck": "pnpm -r --filter \"./packages/*\" typecheck",
+    "test": "pnpm -r --filter \"./packages/*\" test",
+    "check": "pnpm typecheck && pnpm build && pnpm test",
+    "market": "node scripts/market.ts"
+  }
+}

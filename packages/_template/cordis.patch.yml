@@ -1,0 +1,10 @@
+# The configuration layer this bundle contributes to a dsh profile. The row
+# `name` must match the package name in package.json; the host Loader imports
+# that specifier and starts the plugin's main entry.
+#
+# Later layers win per row id, and a patch replaces a row's whole `config`
+# value instead of merging keys. Users can therefore override this row from
+# `$DSH_HOME/profiles/<name>/cordis.patch.yml` without touching this package.
+- insert:
+    - id: dsh-plugin-template
+      name: '@dsh-plugins/template'

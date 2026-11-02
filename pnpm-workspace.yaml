@@ -1,0 +1,9 @@
+# Workspace members. The dsh plugin market generator reads this file too: every
+# package glob below is scanned for packages that declare `dsh.bundle`, so a
+# plugin becomes installable simply by being a member here.
+#
+# Negated globs (`!packages/foo`) are ignored by that generator, not applied.
+# To keep a helper package out of the market, leave it without `dsh.bundle`.
+packages:
+  - packages/*
+  - tooling
