@@ -136,11 +136,32 @@ git 安装拉的是源码，pnpm 会先跑一次嵌套 `pnpm install`、再执�
 
 ```sh
 pnpm market --title "My plugins"
+# 可选：--offline（完全不查注册表，只发 git 源）
+#       --registry <url>（私有注册表）
 ```
 
 产出 `site/index.json` + `site/icons/`。把它放到任意静态主机（`.github/workflows/market.yml`
 已经把它部署到 GitHub Pages），然后在 Web GUI 的**发现**页添加该 `index.json` 的 URL。
-索引指向当前 HEAD 的 commit，所以只发布「已在 HEAD 且没有未提交改动」的包；其余包会被跳过并列出原因。打 tag 时 CI 会自动重跑。
+打 tag 时 CI 会自动重跑。
+
+每个插件按自己是否已发布**自动选源**：
+
+| 状态 | 索引里的 source | 安装 spec | 用户门槛 |
+|---|---|---|---|
+| 已发到 npm | `npm`，列出注册表上全部未弃用的 bundle 版本 | `name@version` | 无：装预构建产物，不跑构建脚本 |
+| 未发布 | `git`，钉 HEAD commit + 包路径 | `git+…#<sha>&path:/packages/x` | 一次 `allowBuilds` 审批 |
+
+git 源还要求包已提交且工作区干净：索引钉的是 commit，未提交的包会被跳过并列出原因。
+注册表不可达时同样回退到 git 源并打印警告。
+
+### 市场里的安装摩擦
+
+- **npm 源**：一键装完，无构建授权；版本列表来自注册表，用户可装旧版本。
+- **git 源**：pnpm 会拦下 git 依赖的构建脚本，dsh 把它变成插件页里的待确认项
+  （手工安装则在 profile 的 `pnpm-workspace.yaml` 里写 `allowBuilds`），且只能装索引钉
+  的那个 commit。
+- 插件稳定后就 `pnpm release:publish` 发 npm：下次生成索引时该包自动从 git 源切到 npm
+  源，用户侧不再需要审批。
 
 ### 版本与标签
 
@@ -172,5 +193,6 @@ pnpm release:publish    # 发布未发布的包
 
 - 浏览器半的 sourcemap 关闭：包裹 `factory` 会改变行号，宁可没有地图也不给错的地图。
   需要地图时按 harness 的 `packages/client/tsdown.client.ts` 做 map 组合。
-- `scripts/market.ts` 只发布当前 commit 一个版本。要按标签导出全部历史版本，用
-  harness 的参考生成器 `apps/plugin-market-generator`。
+- `scripts/market.ts` 对未发布插件只列当前 commit 一个版本；已发布插件则列出注册表上的
+  全部版本。要按 git tag 导出历史版本，用 harness 的参考生成器
+  `apps/plugin-market-generator`。

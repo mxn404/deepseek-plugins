@@ -32,7 +32,7 @@ pnpm typecheck      # 各包 tsc --noEmit
 pnpm build          # 构建全部包 + 校验 exports / bundle patch 文件存在
 pnpm test           # 各包 vitest run
 pnpm check          # typecheck + build + test
-pnpm market         # 生成 site/index.json（只发布已提交且无未提交改动的插件）
+pnpm market         # 生成 site/index.json：已发布包走 npm 源，未发布包走 git 源（须已提交）
 ```
 
 ## 发布
@@ -42,6 +42,8 @@ pnpm market         # 生成 site/index.json（只发布已提交且无未提交
 - 每个插件包必须自带 `"prepare": "tsdown"`：npm 打包前与 git/市场安装后都靠它产出
   `lib/`。pnpm ≥10 会拦 git 依赖的构建，安装时由 dsh 的 `allowBuilds` 审批放行。
   `files` 必须包含 `lib`、`cordis.patch.yml`、`locale`、`icon.svg`。
+- 市场源按包自动判定：注册表认识该包就用 npm 源（列全部版本），否则用 git 源（钉 HEAD）。
+  新增或改名包后要重新生成索引；稳定后优先发 npm，安装无需 `allowBuilds` 审批。
 - 浏览器半的 bundle 必须是 `window.__ModuleLoader__.load({ id, factory })` 形状，且
   `react` / `react-dom` / `@deepseek-ai/*` 保持 external，由页面模块表提供。
 

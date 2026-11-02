@@ -276,7 +276,10 @@ async function publishIcon(name, dir, manifest, iconsDir, warnings) {
 
 const title = option('title', 'DeepSeek Plugins')
 const outputRelative = option('output', 'site/index.json')
-const registry = option('registry', DEFAULT_REGISTRY)
+const registry = (() => {
+  const value = option('registry', DEFAULT_REGISTRY)
+  return value.endsWith('/') ? value : `${value}/`
+})()
 const offline = process.argv.includes('--offline')
 const outputPath = join(REPO_ROOT, outputRelative)
 const siteDir = join(outputPath, '..')
