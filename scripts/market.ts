@@ -1,28 +1,38 @@
 /**
  * Generate a dsh plugin market index (`format: 1`) from the bundle packages of
- * this workspace, pointing every version at this repository at the current
- * commit.
+ * this workspace.
  *
- * The output is what the Web GUI's **Discover** tab reads: it lists one entry per
- * bundle package, with the Git source, path and DSH compatibility range that
- * `dsh plugin add` needs. Publish `site/` on any static host (GitHub Pages is
- * what `.github/workflows/market.yml` does) and add its `index.json` URL as an
- * index source.
+ * The output is what the Web GUI's **Discover** tab reads. Each plugin picks its
+ * source automatically:
+ *
+ * - **published to npm** → every non-deprecated version listed on the registry,
+ *   installed as `name@version`. No build scripts run on the user's machine.
+ * - **not published** → the current commit of this repository at the package
+ *   path, installed as a git spec. pnpm then builds the package with its
+ *   `prepare` script, which the consuming profile must approve through
+ *   `allowBuilds` (dsh turns that into a pending approval in the GUI).
+ *
+ * Publish `site/` on any static host (GitHub Pages is what
+ * `.github/workflows/market.yml` does) and add its `index.json` URL as an index
+ * source.
  *
  * Deliberate differences from the reference generator in the harness checkout:
- * - no network access: it reads this checkout, not tags or registries;
- * - it publishes the current commit only, not one version per release tag;
+ * - versions come from the registry for published packages, and only the current
+ *   commit for unpublished ones;
  * - packages whose directory starts with `_` (the template) and packages marked
- *   `"private": true` are skipped, because neither should be installable.
+ *   `"private": true` are skipped, because neither should be installable;
+ * - a package must be committed and unchanged, because a git entry pins HEAD.
  *
  * @example
  * ```sh
  * pnpm market --title "My plugins"
+ * pnpm market --offline                 # git sources only, no registry lookups
+ * pnpm market --registry https://npm.example.com/
  * ```
  */
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { copyFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { basename, extname, join, relative } from 'node:path'
 import { REPO_ROOT, bundlePatchFiles, isBundlePackage, listPackages, readJson } from './workspace.ts'
 
@@ -35,6 +45,11 @@ const ICON_TYPES = new Map([
   ['.webp', 'image/webp'],
 ])
 const ICON_MAX_BYTES = 256 * 1024
+
+/** The public registry, spelled the way the index format expects a default to be omitted. */
+const DEFAULT_REGISTRY = 'https://registry.npmjs.org/'
+/** Per-request ceiling: a market build should fail loudly rather than hang. */
+const REGISTRY_TIMEOUT_MS = 20_000
 
 /** Read one `--name value` option. */
 function option(name, fallback) {
@@ -70,10 +85,146 @@ function repositoryUrl(value) {
 
 /** Whether a package directory matches HEAD: present there and unchanged in the working tree. */
 function headState(dir) {
-  const present = spawnSync("git", ["cat-file", "-e", `HEAD:${dir}/package.json`], { cwd: REPO_ROOT })
-  if (present.status !== 0) return "absent"
-  const changed = spawnSync("git", ["status", "--porcelain", "--", dir], { cwd: REPO_ROOT, encoding: "utf8" })
-  return (changed.stdout ?? "").trim() === "" ? "clean" : "dirty"
+  const present = spawnSync('git', ['cat-file', '-e', `HEAD:${dir}/package.json`], { cwd: REPO_ROOT })
+  if (present.status !== 0) return 'absent'
+  const changed = spawnSync('git', ['status', '--porcelain', '--', dir], { cwd: REPO_ROOT, encoding: 'utf8' })
+  return (changed.stdout ?? '').trim() === '' ? 'clean' : 'dirty'
+}
+
+/**
+ * Read one exact SemVer version.
+ *
+ * The index only accepts exact versions, so anything else is dropped instead of
+ * guessed at.
+ *
+ * @param text - the version string.
+ * @returns the parsed parts, or undefined when it is not `X.Y.Z[-pre]`.
+ */
+function parseSemver(text) {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(text)
+  if (match === null) return undefined
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    prerelease: match[4] === undefined ? [] : match[4].split('.'),
+  }
+}
+
+/** Compare two prerelease identifiers the way SemVer precedence does. */
+function compareIdentifier(left, right) {
+  const leftNumeric = /^\d+$/.test(left)
+  const rightNumeric = /^\d+$/.test(right)
+  if (leftNumeric && rightNumeric) return Number(left) - Number(right)
+  if (leftNumeric) return -1
+  if (rightNumeric) return 1
+  return left < right ? -1 : left > right ? 1 : 0
+}
+
+/**
+ * Compare two exact versions by SemVer precedence.
+ *
+ * @returns a negative number when `left` precedes `right`, positive when it
+ * follows it, and 0 when they are equal.
+ */
+function compareSemver(left, right) {
+  const a = parseSemver(left)
+  const b = parseSemver(right)
+  if (a === undefined || b === undefined) return left.localeCompare(right)
+  for (const key of ['major', 'minor', 'patch']) {
+    if (a[key] !== b[key]) return a[key] - b[key]
+  }
+  if (a.prerelease.length === 0 || b.prerelease.length === 0) {
+    return b.prerelease.length - a.prerelease.length
+  }
+  for (let index = 0; index < Math.max(a.prerelease.length, b.prerelease.length); index += 1) {
+    const leftId = a.prerelease[index]
+    const rightId = b.prerelease[index]
+    if (leftId === undefined) return -1
+    if (rightId === undefined) return 1
+    const order = compareIdentifier(leftId, rightId)
+    if (order !== 0) return order
+  }
+  return 0
+}
+
+/**
+ * Read a package's registry document.
+ *
+ * @param name - the package name.
+ * @param registry - registry base URL.
+ * @param warnings - receives failures, which the caller resolves by falling back to git.
+ * @returns the document, `null` when the registry does not know the package, or
+ * `undefined` when the registry could not be read.
+ */
+async function fetchPackument(name, registry, warnings) {
+  const base = registry.endsWith('/') ? registry : `${registry}/`
+  const url = `${base}${encodeURIComponent(name)}`
+  let response
+  try {
+    response = await fetch(url, { signal: AbortSignal.timeout(REGISTRY_TIMEOUT_MS) })
+  } catch (error) {
+    warnings.push(`${name}: registry request failed (${error.message}); using the git source`)
+    return undefined
+  }
+  if (response.status === 404) return null
+  if (!response.ok) {
+    warnings.push(`${name}: registry returned ${response.status}; using the git source`)
+    return undefined
+  }
+  try {
+    return await response.json()
+  } catch (error) {
+    warnings.push(`${name}: registry document is not JSON (${error.message}); using the git source`)
+    return undefined
+  }
+}
+
+/**
+ * Build the `versions` list for a package that is published to npm.
+ *
+ * Only versions that are exact SemVer, not deprecated, and declare `dsh.bundle`
+ * are listed: the market installs `name@version`, so a version without a bundle
+ * would install a package that contributes no config layer.
+ *
+ * @param name - the package name.
+ * @param packument - the registry document.
+ * @param registry - registry base URL, recorded only when it is not the default.
+ * @param warnings - receives per-version problems.
+ * @returns the version entries, newest first.
+ */
+function publishedVersions(name, packument, registry, warnings) {
+  const versions = packument?.versions
+  if (versions === null || typeof versions !== 'object') {
+    warnings.push(`${name}: registry document has no versions; using the git source`)
+    return []
+  }
+  const times = packument?.time
+  const entries = []
+  for (const [version, manifest] of Object.entries(versions)) {
+    if (parseSemver(version) === undefined) continue
+    if (manifest === null || typeof manifest !== 'object') continue
+    if (typeof manifest.deprecated === 'string' && manifest.deprecated !== '') continue
+    const bundle = manifest.dsh?.bundle
+    if (bundle === null || typeof bundle !== 'object') continue
+    const published = Date.parse(times?.[version] ?? '')
+    if (!Number.isFinite(published)) {
+      warnings.push(`${name}@${version}: registry records no publish time; version dropped`)
+      continue
+    }
+    const dsh = manifest.engines?.dsh
+    entries.push({
+      version,
+      publishTimestamp: Math.floor(published / 1000),
+      source: { type: 'npm', ...(registry === DEFAULT_REGISTRY ? {} : { registry }) },
+      ...(typeof dsh === 'string' && dsh.trim() !== '' ? { engines: { dsh: dsh.trim() } } : {}),
+    })
+  }
+  entries.sort((left, right) => compareSemver(right.version, left.version))
+  if (entries.length > 0 && entries.every(entry => entry.engines === undefined)) {
+    warnings.push(`${name}: no published version declares engines.dsh, so the market shows no compatibility range`)
+  }
+  return entries
 }
 
 /** Read `meta.title` / `meta.description` from one locale file, if it exists. */
@@ -125,22 +276,22 @@ async function publishIcon(name, dir, manifest, iconsDir, warnings) {
 
 const title = option('title', 'DeepSeek Plugins')
 const outputRelative = option('output', 'site/index.json')
+const registry = option('registry', DEFAULT_REGISTRY)
+const offline = process.argv.includes('--offline')
 const outputPath = join(REPO_ROOT, outputRelative)
 const siteDir = join(outputPath, '..')
 const iconsDir = join(siteDir, 'icons')
 
-// The index points at a commit, so it must describe a committed tree.
-let commit
-try {
-  commit = git(['rev-parse', 'HEAD'])
-} catch (error) {
-  console.error(`✗ ${error.message}`)
-  console.error('  commit the repository before generating the index: the source pins a commit SHA.')
-  process.exit(1)
+if (!/^https?:\/\//.test(registry)) {
+  console.error(`✗ --registry must be an http(s) URL: ${registry}`)
+  process.exit(2)
 }
+
+// A git entry pins a commit, so the index must describe a committed tree.
+const commit = git(['rev-parse', 'HEAD'])
 const commitTimestamp = Number(git(['log', '-1', '--format=%ct']))
 if (git(['status', '--porcelain']) !== '') {
-  console.warn('! working tree is dirty: the index pins HEAD, so uncommitted changes are not included')
+  console.warn('! working tree is dirty: git sources pin HEAD, so uncommitted changes are not published')
 }
 
 const root = await readJson(join(REPO_ROOT, 'package.json'))
@@ -177,8 +328,8 @@ for (const pkg of packages) {
     skipped.push(`${name}: no version`)
     continue
   }
-  // The index pins HEAD, so an uncommitted package would publish a version and
-  // path that the pinned commit does not contain, and the install would fail.
+  // A git entry names a commit and a path, so an uncommitted package would
+  // publish something the pinned commit does not contain.
   const state = headState(pkg.dir)
   if (state !== 'clean') {
     skipped.push(`${name}: ${state === 'absent' ? 'not committed at HEAD' : 'uncommitted changes'}`)
@@ -191,8 +342,39 @@ for (const pkg of packages) {
   const english = await localeMeta(pkg.path, 'en')
   const chinese = await localeMeta(pkg.path, 'zh')
   const engines = manifest.engines
-  const dsh = engines !== null && typeof engines === 'object' ? engines.dsh : undefined
-  if (typeof dsh !== 'string') warnings.push(`${name}: engines.dsh is missing, the version accepts any DSH release`)
+  const localDsh = engines !== null && typeof engines === 'object' ? engines.dsh : undefined
+
+  let versions = []
+  let origin
+  if (offline) {
+    origin = 'git (offline)'
+  } else {
+    const packument = await fetchPackument(name, registry, warnings)
+    if (packument === null) {
+      origin = 'git (not on the registry)'
+    } else if (packument !== undefined) {
+      versions = publishedVersions(name, packument, registry, warnings)
+      origin = versions.length > 0 ? `npm (${versions.length} version(s))` : 'git (no bundle version on the registry)'
+    } else {
+      origin = 'git (registry unavailable)'
+    }
+  }
+
+  if (origin.startsWith('git')) {
+    if (typeof localDsh !== 'string') {
+      warnings.push(`${name}: engines.dsh is missing, so the git version accepts any DSH release`)
+    }
+    versions = [
+      {
+        version: manifest.version,
+        publishTimestamp: commitTimestamp,
+        source: { type: 'git', url: repoUrl, commit, path: pkg.dir },
+        ...(typeof localDsh === 'string' ? { engines: { dsh: localDsh.trim() } } : {}),
+      },
+    ]
+  } else if (!versions.some(entry => entry.version === manifest.version)) {
+    warnings.push(`${name}: local ${manifest.version} is not published yet, so the market lists npm versions only`)
+  }
 
   const entry = {
     name,
@@ -205,16 +387,13 @@ for (const pkg of packages) {
     homepage: typeof manifest.homepage === 'string' && /^https?:\/\//.test(manifest.homepage) ? manifest.homepage : undefined,
     keywords: Array.isArray(manifest.keywords) ? manifest.keywords.filter(word => typeof word === 'string') : undefined,
     repository: { url: repoUrl, directory: pkg.dir },
-    versions: [
-      {
-        version: manifest.version,
-        publishTimestamp: commitTimestamp,
-        source: { type: 'git', url: repoUrl, commit, path: pkg.dir },
-        ...(typeof dsh === 'string' ? { engines: { dsh: dsh.trim() } } : {}),
-      },
-    ],
+    versions,
   }
-  plugins.push(Object.fromEntries(Object.entries(entry).filter(([, value]) => value !== undefined)))
+  plugins.push({
+    entry: Object.fromEntries(Object.entries(entry).filter(([, value]) => value !== undefined)),
+    origin,
+    name,
+  })
 }
 
 if (plugins.length === 0) {
@@ -228,17 +407,20 @@ if (plugins.length === 0) {
   process.exit(1)
 }
 
-plugins.sort((left, right) => String(left.name).localeCompare(String(right.name)))
+plugins.sort((left, right) => left.name.localeCompare(right.name))
 
 const index = {
   format: 1,
   title: { en: title, zh: title },
-  plugins,
+  plugins: plugins.map(plugin => plugin.entry),
 }
 await writeFile(outputPath, `${JSON.stringify(index, null, 2)}\n`, 'utf8')
 
 console.log(`✓ ${outputRelative}: ${plugins.length} plugin(s) at ${commit.slice(0, 7)}`)
-for (const plugin of plugins) console.log(`  · ${plugin.name} ${plugin.versions[0].version} → ${plugin.versions[0].source.path}`)
+for (const plugin of plugins) {
+  const newest = plugin.entry.versions[0]
+  console.log(`  · ${plugin.name} ${newest.version} — ${plugin.origin}`)
+}
 if (skipped.length > 0) {
   console.log(`skipped ${skipped.length} package(s):`)
   for (const line of skipped) console.log(`  · ${line}`)
