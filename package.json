@@ -17,6 +17,12 @@
     "typecheck": "pnpm -r --filter \"./packages/*\" typecheck",
     "test": "pnpm -r --filter \"./packages/*\" test",
     "check": "pnpm typecheck && pnpm build && pnpm test",
-    "market": "node scripts/market.ts"
+    "market": "node scripts/market.ts",
+    "changeset": "changeset",
+    "release:version": "changeset version",
+    "release:publish": "changeset publish"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^3.0.3"
   }
 }

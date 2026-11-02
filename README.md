@@ -12,6 +12,7 @@ deepseek-plugins/
 ├─ package.json                 # 根包：只做容器，绝不声明 dsh.bundle
 ├─ tsconfig.base.json           # 各插件包共享的编译选项
 ├─ .npmrc                       # autoInstallPeers=false：peer 必须显式声明
+├─ .changeset/                  # 版本与变更记录（changesets）
 ├─ AGENTS.md                    # 仓库不变量与命令，供 agent 读取
 ├─ tooling/                     # 构建期共享预设，不发布、不被运行时 import
 │  ├─ index.mjs
@@ -29,6 +30,14 @@ deepseek-plugins/
    ├─ ci.yml                    # typecheck + build + test
    └─ market.yml                # 打 tag 后重建索引并部署 Pages
 ```
+
+## 首次使用
+
+1. 把根 `package.json` 的 `repository.url` 改成你的仓库地址（市场索引的 `source.url`
+   由它生成，占位地址会让安装落到错误的仓库），顺手改 `name` 与 `description`。
+2. `pnpm install`。
+3. `cp -r packages/_template packages/dsh-<name>`，按模板 README 改名，再
+   `pnpm install` 让新包进入 lockfile。
 
 ## 一个插件包
 
@@ -108,8 +117,8 @@ link 安装会保留插件自己的 `node_modules`，但消费的仍是构建产
 pnpm --filter dsh-my-thing publish
 ```
 
-`prepare` 在打包前跑 tsdown，用户 `dsh plugin add dsh-my-thing` 装到的是预构建产物，
-不需要任何构建授权。
+`prepack` 会在 `pnpm publish` / `pnpm pack` 前跑 tsdown，用户 `dsh plugin add dsh-my-thing`
+装到的是预构建产物，不需要任何构建授权。
 
 **2. git 直装**
 
@@ -117,9 +126,10 @@ pnpm --filter dsh-my-thing publish
 dsh plugin --profile dev add 'git+https://github.com/you/deepseek-plugins.git#<sha>&path:/packages/dsh-my-thing'
 ```
 
-git 安装拉源码并跑 `prepare`，pnpm ≥10 需要用户显式授权（profile 的
-`pnpm-workspace.yaml` 里加 `allowBuilds: { dsh-my-thing: true }`）。锁定 commit，别用
-分支名。
+git 安装拉的是源码，`prepack` 不会运行：这条路线要求该插件包自带
+`"prepare": "tsdown"`，pnpm 会在 `git` 安装后执行它。pnpm ≥10 还需要用户显式授权
+（profile 的 `pnpm-workspace.yaml` 里加 `allowBuilds: { dsh-my-thing: true }`）。锁定
+commit，别用分支名。
 
 **3. 市场索引**
 
@@ -133,9 +143,17 @@ pnpm market --title "My plugins"
 
 ### 版本与标签
 
-多插件版本各自独立，用 changesets 管理，标签形如 `dsh-foo@0.1.0`（scoped 包是
-`@you/dsh-foo@1.2.0`）。不要用 `vX.Y.Z`：市场生成器把这种标签视为"适用于所有包"，
-版本分叉后会写出错乱的历史。
+多插件版本各自独立，用 changesets 管理：
+
+```sh
+pnpm changeset          # 记录变更（选包、选 bump 级别、写说明）
+pnpm release:version    # 改版本号、生成 CHANGELOG
+pnpm release:publish    # 发布未发布的包
+```
+
+标签形如 `dsh-foo@0.1.0`（scoped 包是 `@you/dsh-foo@1.2.0`），这正是市场索引生成器
+认的格式。不要用 `vX.Y.Z`：市场生成器把这种标签视为"适用于所有包"，版本分叉后会写出
+错乱的历史。
 
 ## 目录规约
 

@@ -48,3 +48,9 @@ pnpm --filter <包名> typecheck
 pnpm --filter <包名> test
 pnpm build      # 构建全部包并校验 exports / bundle patch 文件确实存在
 ```
+
+## 发布
+
+- **npm**：`prepack` 已经挂在 `tsdown` 上，`pnpm --filter <包名> publish` 会先构建。
+- **git 直装**：给这个包加 `"prepare": "tsdown"`。git 安装拉源码后只跑 `prepare`，
+  `prepack` 不会触发；不加的话装到的是没有 `lib/` 的源码，插件加载会失败。

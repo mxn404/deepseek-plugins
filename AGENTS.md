@@ -39,8 +39,8 @@ pnpm market         # 生成 site/index.json（需要已提交，索引指向 HE
 
 - 版本独立，用 changesets；标签格式 `<包名>@<版本>`，不要用 `vX.Y.Z`（市场会当成
   适用于所有包）。
-- npm 发布前 `prepare` 会跑 tsdown；`files` 必须包含 `lib`、`cordis.patch.yml`、
-  `locale`、`icon.svg`。
+- npm 发布靠 `prepack` 跑 tsdown；git 直装靠插件包自己的 `prepare`，两者不能互相
+  替代。`files` 必须包含 `lib`、`cordis.patch.yml`、`locale`、`icon.svg`。
 - 浏览器半的 bundle 必须是 `window.__ModuleLoader__.load({ id, factory })` 形状，且
   `react` / `react-dom` / `@deepseek-ai/*` 保持 external，由页面模块表提供。
 

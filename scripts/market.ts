@@ -23,7 +23,7 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { copyFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
-import { basename, extname, join } from 'node:path'
+import { basename, extname, join, relative } from 'node:path'
 import { REPO_ROOT, bundlePatchFiles, isBundlePackage, listPackages, readJson } from './workspace.ts'
 
 /** Icon formats the index accepts, with the size ceiling the format enforces. */
@@ -204,6 +204,8 @@ for (const pkg of packages) {
 
 if (plugins.length === 0) {
   console.error('✗ no installable bundle packages found')
+  console.error('  packages/_template is a copy-ready skeleton, not a published plugin.')
+  console.error('  Copy it to packages/dsh-<name>, fill in the manifest, then rerun this script.')
   process.exit(1)
 }
 
@@ -228,4 +230,4 @@ if (warnings.length > 0) {
   for (const line of warnings) console.warn(`  - ${line}`)
 }
 console.log('')
-console.log(`next: publish ${siteDir.replace(`${REPO_ROOT}/`, '')}/ on a static host and add ${basename(outputPath)} as an index source`)
+console.log(`next: publish ${relative(REPO_ROOT, siteDir)}/ on a static host and add ${basename(outputPath)} as an index source`)
