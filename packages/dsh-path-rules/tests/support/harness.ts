@@ -1,5 +1,5 @@
 /**
- * Real-service harness for the `dsh-rules` integration seam.
+ * Real-service harness for the `dsh-path-rules` integration seam.
  *
  * Real Cordis Context, real agent loop, real filesystem tools, and a scripted
  * mock LLM adapter. Nothing in the plugin's own seams is mocked; assertions
@@ -84,7 +84,7 @@ export async function createRulesHarness(
     async createAgent(route, cwd = root) {
       sessions += 1
       return ctx.agentLoop.create(
-        SessionId(`dsh-rules-${String(sessions)}`),
+        SessionId(`dsh-path-rules-${String(sessions)}`),
         { provider: route, model: 'mock' },
         { cwd },
       )

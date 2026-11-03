@@ -5,7 +5,7 @@
  * "inside a base directory, POSIX style"; keeping one implementation stops the
  * three call sites from drifting apart.
  *
- * @module dsh-rules/paths
+ * @module dsh-path-rules/paths
  */
 
 import { isAbsolute, relative, resolve, sep } from 'node:path'

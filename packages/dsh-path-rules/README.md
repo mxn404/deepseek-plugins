@@ -1,4 +1,4 @@
-# `dsh-rules`
+# `dsh-path-rules`
 
 按路径生效的仓库规则。把约定写成 `.dsh/rules/**/*.md` 文件，**只有当 agent 碰到范围内的
 文件时**，规则的正文才进入它的上下文；不带路径范围的规则在每次会话开始时全文载入，文件改动后
@@ -42,7 +42,7 @@
 
 ## 配置
 
-行配置在 profile 的 `cordis.patch.yml` 里按行 id `dsh-rules` 覆盖（整块 `config` 替换）。
+行配置在 profile 的 `cordis.patch.yml` 里按行 id `dsh-path-rules` 覆盖（整块 `config` 替换）。
 默认值只写在 `src/config.ts` 的 schema 一处。
 
 | 项 | 默认 | 作用 |
@@ -55,8 +55,8 @@
 
 ```yaml
 # ~/.dsh/profiles/<name>/cordis.patch.yml
-- id: dsh-rules
-  name: 'dsh-rules'
+- id: dsh-path-rules
+  name: 'dsh-path-rules'
   config:
     roots: ['.dsh/rules', '.claude/rules']
     maxBytes: 32768
@@ -86,11 +86,11 @@ glob 是标准语义：`**` 跨目录，`*` 不跨 `/`，另有 `?`、`{a,b}`、
 ## 安装与验证
 
 ```sh
-pnpm --dir /home/ubuntu/code/deepseek-harness dsh plugin --profile dev add /home/ubuntu/code/deepseek-plugins/packages/dsh-rules
-pnpm --dir /home/ubuntu/code/deepseek-harness dsh --profile dev --dump-config   # 应出现 "# == dsh-rules"
+pnpm --dir /home/ubuntu/code/deepseek-harness dsh plugin --profile dev add /home/ubuntu/code/deepseek-plugins/packages/dsh-path-rules
+pnpm --dir /home/ubuntu/code/deepseek-harness dsh --profile dev --dump-config   # 应出现 "# == dsh-path-rules"
 ```
 
-构建产物由 `prepare`（tsdown）产出；改完源码重新 `pnpm --filter dsh-rules build`。
+构建产物由 `prepare`（tsdown）产出；改完源码重新 `pnpm --filter dsh-path-rules build`。
 
 ## Known blind spots
 

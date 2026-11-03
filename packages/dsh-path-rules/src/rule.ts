@@ -6,7 +6,7 @@
  * Parsing and matching are pure so the format contract can be tested without
  * an agent loop.
  *
- * @module dsh-rules/rule
+ * @module dsh-path-rules/rule
  */
 
 import { createHash } from 'node:crypto'

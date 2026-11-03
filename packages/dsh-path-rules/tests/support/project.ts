@@ -1,5 +1,5 @@
 /**
- * Shared fixtures for the `dsh-rules` integration specs.
+ * Shared fixtures for the `dsh-path-rules` integration specs.
  *
  * Temporary repositories, rule markdown, scripted bash calls, and one-turn
  * drivers. Everything here is test scaffolding; the behavior under test lives
@@ -14,7 +14,7 @@ import { dirname, join } from 'node:path'
 import { toolCallResponse } from './mock-adapter.ts'
 
 /** Create a temporary project root with a `.git` marker, stopping discovery there. */
-export async function createRepo(prefix = 'dsh-rules-'): Promise<string> {
+export async function createRepo(prefix = 'dsh-path-rules-'): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), prefix))
   await mkdir(join(root, '.git'), { recursive: true })
   return root

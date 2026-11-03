@@ -5,7 +5,7 @@
  * always-on rule bodies, the session-start rule index, and triggered bodies.
  * The frame shape mirrors the host's own AGENTS.md injection.
  *
- * @module dsh-rules/render
+ * @module dsh-path-rules/render
  */
 
 import type { Rule, RuleMatch } from './rule.ts'

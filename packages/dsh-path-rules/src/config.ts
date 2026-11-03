@@ -1,10 +1,10 @@
 /**
- * Row configuration for the `dsh-rules` host plugin.
+ * Row configuration for the `dsh-path-rules` host plugin.
  *
  * The row defaults live here and nowhere else: `apply` receives the config the
  * Loader already validated and defaulted.
  *
- * @module dsh-rules/config
+ * @module dsh-path-rules/config
  */
 
 import Schema from '@deepseek-ai/schemastery'

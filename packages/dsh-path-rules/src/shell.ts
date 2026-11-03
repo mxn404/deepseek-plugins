@@ -15,7 +15,7 @@
  * - `sed -n '<range>p' <file>`
  * - `grep <flags...> <pattern> <file>`, including `-e <pattern>`
  *
- * @module dsh-rules/shell
+ * @module dsh-path-rules/shell
  */
 
 /** The five read commands this plugin recognizes. */

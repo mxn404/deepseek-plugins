@@ -1,5 +1,5 @@
 {
-  "name": "dsh-rules",
+  "name": "dsh-path-rules",
   "version": "0.1.0",
   "description": "Path-scoped repository rules: markdown conventions under .dsh/rules load into the agent's context when it touches a matching file.",
   "keywords": [
@@ -90,10 +90,10 @@
     "prepare": "tsdown"
   },
   "author": "mxn404",
-  "homepage": "https://github.com/mxn404/deepseek-plugins/tree/main/packages/dsh-rules",
+  "homepage": "https://github.com/mxn404/deepseek-plugins/tree/main/packages/dsh-path-rules",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/mxn404/deepseek-plugins.git",
-    "directory": "packages/dsh-rules"
+    "directory": "packages/dsh-path-rules"
   }
 }

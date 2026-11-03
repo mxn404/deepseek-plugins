@@ -6,5 +6,5 @@
 # value instead of merging keys. Users can therefore override this row from
 # `$DSH_HOME/profiles/<name>/cordis.patch.yml` without touching this package.
 - insert:
-    - id: dsh-rules
-      name: 'dsh-rules'
+    - id: dsh-path-rules
+      name: 'dsh-path-rules'

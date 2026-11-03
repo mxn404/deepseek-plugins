@@ -8,7 +8,7 @@
  * (session start, where everything is validated) from a `candidates` refresh
  * (a trigger batch, where only rules that could matter are re-validated).
  *
- * @module dsh-rules/discover
+ * @module dsh-path-rules/discover
  */
 
 import { readdir, readFile, realpath, stat } from 'node:fs/promises'

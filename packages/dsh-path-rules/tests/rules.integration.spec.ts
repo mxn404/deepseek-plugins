@@ -1,5 +1,5 @@
 /**
- * Integration spec for `dsh-rules`.
+ * Integration spec for `dsh-path-rules`.
  *
  * Every case mounts a real Context, the real agent loop, the real filesystem
  * tools, and a scripted mock model adapter in a temporary project. Assertions

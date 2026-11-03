@@ -1,5 +1,5 @@
 /**
- * Per-spec lifecycle for the `dsh-rules` integration specs.
+ * Per-spec lifecycle for the `dsh-path-rules` integration specs.
  *
  * A spec file owns one fixture; every temporary project root and every mounted
  * harness it creates is tracked so a single `afterEach` disposes the harnesses

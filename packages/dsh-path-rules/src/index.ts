@@ -1,5 +1,5 @@
 /**
- * Host half of `dsh-rules`.
+ * Host half of `dsh-path-rules`.
  *
  * Rules are markdown files under `.dsh/rules/` (configurable roots). Always-on
  * rules (no `paths` frontmatter) enter the first model request together with an
@@ -14,7 +14,7 @@
  * `<system-reminder>` message per step, deduplicated per agent by rule identity
  * and content version.
  *
- * @module dsh-rules
+ * @module dsh-path-rules
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -32,7 +32,7 @@ import { hasIndexEntries, renderReminder, renderRuleIndex } from './render.ts'
 import { parseSingleFileReadCommand } from './shell.ts'
 
 /** Plugin id: package name and bundle row id. */
-export const name = 'dsh-rules'
+export const name = 'dsh-path-rules'
 
 /** Services this plugin needs before `apply` runs. */
 export const inject = ['agents', 'workingDirectory']
@@ -42,13 +42,13 @@ export type { Config as RulesConfig }
 
 /** Producer source carried by every injected rules message. */
 export interface RulesMessageSource {
-  kind: 'dsh-rules'
+  kind: 'dsh-path-rules'
   form: 'instructions'
 }
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
-    'dsh-rules': RulesMessageSource
+    'dsh-path-rules': RulesMessageSource
   }
 }
 
@@ -239,7 +239,7 @@ function warnIfIndexOverflow(
 ): void {
   if (index !== undefined || !hasIndexEntries(snapshot.rules)) return
   ctx.logger.warn(
-    `dsh-rules: rule index for ${snapshot.projectRoot} exceeds indexMaxBytes ${budget}; `
+    `dsh-path-rules: rule index for ${snapshot.projectRoot} exceeds indexMaxBytes ${budget}; `
     + 'the index was not injected',
   )
 }
@@ -259,7 +259,7 @@ function foldReminder(
 ): PreStepDecision {
   const desired = createUserMessage({
     content: [{ type: 'text', text }],
-    source: { kind: 'dsh-rules', form: 'instructions' },
+    source: { kind: 'dsh-path-rules', form: 'instructions' },
   })
   const lastClaimedIndex = decision.messages.findLastIndex(message => messages.includes(message))
   return { ...decision, messages: decision.messages.toSpliced(lastClaimedIndex + 1, 0, desired) }
@@ -293,7 +293,7 @@ export function apply(ctx: Context, config: RulesConfig): void {
         roots: resolved.roots,
         maxBytes: resolved.maxBytes,
         onInvalidRule: (rule) => {
-          ctx.logger.warn(`dsh-rules: rule ${rule.absolutePath} was not loaded: ${rule.reason}`)
+          ctx.logger.warn(`dsh-path-rules: rule ${rule.absolutePath} was not loaded: ${rule.reason}`)
         },
       }),
       startupDelivered: false,
