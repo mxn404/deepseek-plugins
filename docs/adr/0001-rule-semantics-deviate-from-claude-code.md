@@ -2,13 +2,13 @@
 
 dsh 今天只有一套指令加载机制：`@deepseek-ai/dsh-agent-instructions` 按固定文件名
 （`AGENTS.md` / `CLAUDE.md`）沿祖先目录链加载，**明确不解释 `.claude/rules/`**。要做
-`dsh-rules` 插件复刻 Claude Code 的「按路径生效的规则」，就得自己实现发现、匹配与注入。
+`dsh-path-rules` 插件复刻 Claude Code 的「按路径生效的规则」，就得自己实现发现、匹配与注入。
 Claude Code 2.1.307 的语义（官方文档 + 本地包 + CHANGELOG）已固定下来，其中格式、基准目录、
 触发集、常驻规则四条按原样对齐；下面七条不照抄，各有具体代价。
 
 ## 偏离清单
 
-| 项 | Claude Code | dsh-rules | 为什么 |
+| 项 | Claude Code | dsh-path-rules | 为什么 |
 |---|---|---|---|
 | 规则索引 | **不注入**任何索引，模型不知道未加载的规则存在 | 会话开始注入 `name + paths` 的索引 | 上游把「让模型知道有这些规则」留给了用户：参考项目只能手写索引并用 `test_rules_index.py` 钉住。dsh 在会话开始有一个稳定时机，一条小消息就能消掉这份人工成本 |
 | 注入形态 | `Contents of <path>:` 头的 memory 附件 | 沿用 dsh 的 `<system-reminder>` 包裹 + user 角色消息 | 与宿主既有的 AGENTS.md 注入同形；模型已经会读这种形态，不必为规则再教一遍 |
