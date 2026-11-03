@@ -9,6 +9,7 @@ node_modules/
 
 # Local scratch caches used while scaffolding in this checkout.
 .npm-cache/
+.pnpm-cache/
 
 # Generated market index. `pnpm market` recreates it; the deploy workflow uploads
 # it from the build job. Remove these two lines to publish the index from git.
