@@ -84,8 +84,19 @@ describe('parseRuleMarkdown', () => {
 
 describe('matchRules glob semantics', () => {
   function matchedNames(rules: Rule[], touched: string[], cwd = '/repo'): string[] {
-    return matchRules(rules, touched, cwd).map(rule => rule.name)
+    return matchRules(rules, touched, cwd).map(hit => hit.rule.name)
   }
+
+  it('reports every triggering file once, sorted, as absolute paths', () => {
+    const rule = ruleFromMarkdown('---\npaths: [src/**]\n---\nbody\n')
+    const hits = matchRules(
+      [rule],
+      ['/repo/src/b.ts', '/repo/src/a.ts', '/repo/src/b.ts', '/elsewhere/src/a.ts'],
+      '/repo',
+    )
+    expect(hits).toHaveLength(1)
+    expect(hits[0]!.triggeredBy).toEqual(['/repo/src/a.ts', '/repo/src/b.ts'])
+  })
 
   it('`**` crosses directories and `*` does not', () => {
     const deep = ruleFromMarkdown('---\npaths: [src/**]\n---\nbody\n')
@@ -224,6 +235,6 @@ describe('reference rules from security_audit_tool', () => {
   ])('maps %s to its rule set', async (relativePath, expectedNames) => {
     const rules = await referenceRules()
     const hit = matchRules([...rules.values()], [join(dirname(REFERENCE_RULES), relativePath)], dirname(REFERENCE_RULES))
-    expect(hit.map(rule => rule.name).sort()).toEqual([...expectedNames].sort())
+    expect(hit.map(entry => entry.rule.name).sort()).toEqual([...expectedNames].sort())
   })
 })

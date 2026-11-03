@@ -12,6 +12,7 @@
 import { createHash } from 'node:crypto'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { parse as parseYaml } from 'yaml'
+import { relativeInside } from './paths.ts'
 
 /** Why a rule cannot participate in injection. */
 export type RuleStatus = 'ok' | 'parse-error' | 'too-large' | 'pattern-error'
@@ -351,33 +352,40 @@ export function failedRule(identity: RuleIdentity, status: Exclude<RuleStatus, '
  * @returns the POSIX relative path, or `undefined` when the file is outside the base directory.
  */
 export function ruleRelativePath(baseDir: string, absolutePath: string): string | undefined {
-  const rel = relative(baseDir, resolve(absolutePath))
-  if (rel.length === 0 || isAbsolute(rel) || rel.split(sep)[0] === '..') return undefined
-  return rel.split(sep).join('/')
+  return relativeInside(baseDir, absolutePath)
+}
+
+/** One rule selected by a trigger, with the touched files that selected it. */
+export interface RuleMatch {
+  /** The matching path-scoped rule. */
+  readonly rule: Rule
+  /** Sorted absolute paths from this batch that fall inside the rule's scope. */
+  readonly triggeredBy: readonly string[]
 }
 
 /**
  * Match touched files against path-scoped rules.
  *
  * Pure: the same rules, touched paths, and working directory always produce
- * the same ordered subset. Rules without `paths` are always-on and never
+ * the same ordered hit records. Rules without `paths` are always-on and never
  * returned here.
  * @param rules - rules in deterministic order.
  * @param touchedPaths - absolute or cwd-relative paths the agent touched.
  * @param cwd - directory relative touched paths resolve against.
- * @returns matching rules in input order.
+ * @returns one hit per matching rule, in input order, naming every triggering
+ * file exactly once.
  */
-export function matchRules(rules: readonly Rule[], touchedPaths: readonly string[], cwd: string): Rule[] {
+export function matchRules(rules: readonly Rule[], touchedPaths: readonly string[], cwd: string): RuleMatch[] {
   const resolved = [...new Set(touchedPaths.map(path => isAbsolute(path) ? resolve(path) : resolve(cwd, path)))]
-  const matched: Rule[] = []
+  const matched: RuleMatch[] = []
   for (const rule of rules) {
     if (rule.status !== 'ok' || rule.paths.length === 0) continue
-    const candidates = resolved
-      .map(path => ruleRelativePath(rule.baseDir, path))
-      .filter((path): path is string => path !== undefined)
-    if (candidates.some(path => rule.matchers.some(matcher => matcher.test(path)))) {
-      matched.push(rule)
+    const triggeredBy: string[] = []
+    for (const path of resolved) {
+      const rel = ruleRelativePath(rule.baseDir, path)
+      if (rel !== undefined && rule.matchers.some(matcher => matcher.test(rel))) triggeredBy.push(path)
     }
+    if (triggeredBy.length > 0) matched.push({ rule, triggeredBy: triggeredBy.sort() })
   }
   return matched
 }

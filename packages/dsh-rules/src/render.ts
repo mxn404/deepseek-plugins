@@ -8,8 +8,8 @@
  * @module dsh-rules/render
  */
 
-import { isAbsolute, relative } from 'node:path'
-import type { Rule } from './rule.ts'
+import type { Rule, RuleMatch } from './rule.ts'
+import { relativeInside } from './paths.ts'
 
 const REMINDER_OPEN = '<system-reminder>'
 const REMINDER_CLOSE = '</system-reminder>'
@@ -32,17 +32,16 @@ export const REPLAY_INTRO = 'The following repository rules were loaded earlier 
 export const INDEX_INTRO = 'Repository rule index: path-scoped rules load automatically '
   + 'when you read, write, or edit a matching file.'
 
-/** One triggered rule and the touched files that selected it. */
-export interface TriggeredRule {
-  readonly rule: Rule
-  readonly triggeredBy: readonly string[]
-}
+/** Section headers: the only text that differs between the three rule sections. */
+const ALWAYS_ON_HEADER = 'Repository rule (always on)'
+const TRIGGERED_HEADER = 'Repository rule'
+const REPLAYED_HEADER = 'Repository rule (replayed)'
 
 /** Everything one injection message can carry. */
 export interface ReminderContent {
   readonly alwaysOn: readonly Rule[]
   readonly index: string | undefined
-  readonly triggered: readonly TriggeredRule[]
+  readonly triggered: readonly RuleMatch[]
   readonly replayed: readonly Rule[]
 }
 
@@ -57,9 +56,7 @@ function byteLength(value: string): number {
  * @returns project-root-relative path, or the absolute path when outside the project.
  */
 export function displayPath(projectRoot: string, absolutePath: string): string {
-  const rel = relative(projectRoot, absolutePath)
-  if (rel.length === 0 || isAbsolute(rel) || rel.split(/[\\/]/)[0] === '..') return absolutePath
-  return rel.split(/[\\/]/).join('/')
+  return relativeInside(projectRoot, absolutePath) ?? absolutePath
 }
 
 /** Index rendering stage, from richest to most compact. */
@@ -68,11 +65,20 @@ type IndexMode = 'full' | 'paths' | 'names'
 /**
  * Rules named in the index: every path-scoped rule plus every rule that failed
  * closed. Usable always-on rules are injected in full and need no index entry.
+ * @param rule - one discovered rule.
+ * @returns true when the rule earns an index line.
+ */
+function indexed(rule: Rule): boolean {
+  return rule.status !== 'ok' || rule.paths.length > 0
+}
+
+/**
+ * Whether the rule index has at least one line.
  * @param rules - discovered rules.
- * @returns true when the index has at least one line.
+ * @returns true when the index would render an entry.
  */
 export function hasIndexEntries(rules: readonly Rule[]): boolean {
-  return rules.some(rule => rule.status !== 'ok' || rule.paths.length > 0)
+  return rules.some(indexed)
 }
 
 function indexLine(rule: Rule, mode: IndexMode): string {
@@ -99,7 +105,7 @@ function renderIndexAt(rules: readonly Rule[], mode: IndexMode): string {
  * @returns the index text, or `undefined` when it cannot fit or has no entries.
  */
 export function renderRuleIndex(rules: readonly Rule[], budget: number): string | undefined {
-  const entries = rules.filter(rule => rule.status !== 'ok' || rule.paths.length > 0)
+  const entries = rules.filter(indexed)
   if (entries.length === 0) return undefined
   for (const mode of ['full', 'paths', 'names'] as const) {
     const text = renderIndexAt(entries, mode)
@@ -108,33 +114,29 @@ export function renderRuleIndex(rules: readonly Rule[], budget: number): string 
   return undefined
 }
 
-function alwaysOnSection(rule: Rule, projectRoot: string): string {
-  return [
-    `Repository rule (always on): ${rule.name}`,
+/**
+ * One rule section: header, source, optional triggering files, then the body.
+ * @param rule - rule to render.
+ * @param projectRoot - display base for source and triggering paths.
+ * @param header - section header that distinguishes always-on, triggered, and replayed rules.
+ * @param triggeredBy - absolute triggering paths; omitted for non-triggered sections.
+ * @returns the section text.
+ */
+function ruleSection(
+  rule: Rule,
+  projectRoot: string,
+  header: string,
+  triggeredBy?: readonly string[],
+): string {
+  const lines = [
+    `${header}: ${rule.name}`,
     `Source: ${displayPath(projectRoot, rule.absolutePath)}`,
-    '',
-    rule.body,
-  ].join('\n')
-}
-
-function triggeredSection(entry: TriggeredRule, projectRoot: string): string {
-  const triggeredBy = entry.triggeredBy.map(path => displayPath(projectRoot, path)).join(', ')
-  return [
-    `Repository rule: ${entry.rule.name}`,
-    `Source: ${displayPath(projectRoot, entry.rule.absolutePath)}`,
-    `Triggered by: ${triggeredBy}`,
-    '',
-    entry.rule.body,
-  ].join('\n')
-}
-
-function replayedSection(rule: Rule, projectRoot: string): string {
-  return [
-    `Repository rule (replayed): ${rule.name}`,
-    `Source: ${displayPath(projectRoot, rule.absolutePath)}`,
-    '',
-    rule.body,
-  ].join('\n')
+  ]
+  if (triggeredBy !== undefined) {
+    lines.push(`Triggered by: ${triggeredBy.map(path => displayPath(projectRoot, path)).join(', ')}`)
+  }
+  lines.push('', rule.body)
+  return lines.join('\n')
 }
 
 /**
@@ -148,20 +150,21 @@ export function renderReminder(content: ReminderContent, projectRoot: string): s
   if (content.alwaysOn.length > 0) {
     blocks.push([
       ALWAYS_ON_INTRO,
-      ...content.alwaysOn.map(rule => alwaysOnSection(rule, projectRoot)),
+      ...content.alwaysOn.map(rule => ruleSection(rule, projectRoot, ALWAYS_ON_HEADER)),
     ].join('\n\n'))
   }
   if (content.index !== undefined) blocks.push(content.index)
   if (content.triggered.length > 0) {
     blocks.push([
       TRIGGER_INTRO,
-      ...content.triggered.map(entry => triggeredSection(entry, projectRoot)),
+      ...content.triggered.map(entry =>
+        ruleSection(entry.rule, projectRoot, TRIGGERED_HEADER, entry.triggeredBy)),
     ].join('\n\n'))
   }
   if (content.replayed.length > 0) {
     blocks.push([
       REPLAY_INTRO,
-      ...content.replayed.map(rule => replayedSection(rule, projectRoot)),
+      ...content.replayed.map(rule => ruleSection(rule, projectRoot, REPLAYED_HEADER)),
     ].join('\n\n'))
   }
   if (blocks.length === 0) return undefined

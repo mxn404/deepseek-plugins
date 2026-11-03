@@ -3,12 +3,16 @@
  *
  * Rules are markdown files under `.dsh/rules/` (configurable roots). Always-on
  * rules (no `paths` frontmatter) enter the first model request together with an
- * index of path-scoped rules. A successful `read` / `write` / `edit` result, or
- * a conservative single-file shell read, on a matching file queues that rule's
- * body for the next step. After a session compaction, previously injected rules
- * are replayed once on the next step. Everything reaches the model as one
- * user-role `<system-reminder>` message per step, deduplicated per agent by rule
- * identity and content version.
+ * index of path-scoped rules; after that, an always-on rule whose file changed
+ * (or a newly created one) is re-injected on the next injection. A successful
+ * `read` / `write` / `edit` result, or a conservative single-file shell read,
+ * on a matching file queues that rule's body for the next step. Nested PTC
+ * executions count as touches too: a `read` inside `run_code` is a real
+ * successful tool call on the same agent, so it is recorded like a
+ * model-direct call. After a session compaction, previously injected rules are
+ * replayed once on the next step. Everything reaches the model as one user-role
+ * `<system-reminder>` message per step, deduplicated per agent by rule identity
+ * and content version.
  *
  * @module dsh-rules
  */
@@ -17,13 +21,14 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-compaction'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import type { UserMessage } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-working-directory'
 import type { ToolExecution, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import { isAbsolute, resolve } from 'node:path'
 import { Config, resolveConfig, type Config as RulesConfig, type ResolvedConfig } from './config.ts'
-import { RuleWorkspace } from './discover.ts'
-import { matchRules, ruleRelativePath, type Rule } from './rule.ts'
-import { hasIndexEntries, renderReminder, renderRuleIndex, type TriggeredRule } from './render.ts'
+import { RuleWorkspace, type RuleSnapshot, type SnapshotRefresh } from './discover.ts'
+import { matchRules, type Rule, type RuleMatch } from './rule.ts'
+import { hasIndexEntries, renderReminder, renderRuleIndex } from './render.ts'
 import { parseSingleFileReadCommand } from './shell.ts'
 
 /** Plugin id: package name and bundle row id. */
@@ -49,13 +54,38 @@ declare module '@deepseek-ai/dsh-llm' {
 
 const FILE_TOUCH_TOOLS: ReadonlySet<string> = new Set(['read', 'write', 'edit'])
 
+/** Nothing has been delivered yet: the first injection owes every always-on rule. */
+const NOTHING_SEEN: ReadonlyMap<string, string> = new Map()
+
+/**
+ * Per-agent bookkeeping for injection, dedupe, and replay.
+ *
+ * Rule content, discovery, and stat caching live in {@link RuleWorkspace}; this
+ * state only records what this agent has already received.
+ */
 interface AgentRulesState {
+  /** Stat-validated rule cache and discovery for this agent. */
   workspace: RuleWorkspace
+  /** The session-start injection (always-on bodies plus the index) has happened. */
   startupDelivered: boolean
+  /** Rule absolute path → content version already injected for this agent. */
   seen: Map<string, string>
+  /** Paths touched by successful tools since the last injection. */
   touched: Set<string>
   /** A compaction happened; the next step replays everything already injected. */
   replayPending: boolean
+}
+
+/** Everything one injection message can carry, after per-agent dedupe. */
+interface InjectionPlan {
+  /** Always-on rules to render: every one at startup, only changed ones later. */
+  readonly alwaysOn: Rule[]
+  /** Session-start index text, when startup delivers it. */
+  readonly index: string | undefined
+  /** Path-scoped rules selected by this step's touches. */
+  readonly triggered: RuleMatch[]
+  /** Rules restated because the conversation was compacted. */
+  readonly replayed: Rule[]
 }
 
 function filePathFromExecution(exec: Readonly<ToolExecution>): string | undefined {
@@ -97,20 +127,153 @@ function bashReadPath(exec: Readonly<ToolExecution>, sessionCwd: string): string
 }
 
 /**
- * Absolute paths that selected one rule out of the touched batch.
- * @param rule - matched rule.
- * @param touched - raw touched paths.
- * @param cwd - directory relative paths resolve against.
- * @returns sorted absolute triggering paths.
+ * Always-on rules that still owe this agent a body: pathless, usable, and never
+ * injected at their current content version. Startup passes {@link NOTHING_SEEN}
+ * so every always-on rule is delivered once; later injections pass the seen map
+ * so only changed or newly created rules come back.
+ * @param rules - the current snapshot, in deterministic order.
+ * @param seen - rule absolute path → version already injected.
+ * @returns always-on rules to render in this injection.
  */
-function triggeringPaths(rule: Rule, touched: readonly string[], cwd: string): string[] {
-  const hits = new Set<string>()
-  for (const path of touched) {
-    const absolute = isAbsolute(path) ? resolve(path) : resolve(cwd, path)
-    const rel = ruleRelativePath(rule.baseDir, absolute)
-    if (rel !== undefined && rule.matchers.some(matcher => matcher.test(rel))) hits.add(absolute)
+function alwaysOnToInject(rules: readonly Rule[], seen: ReadonlyMap<string, string>): Rule[] {
+  return rules.filter(rule =>
+    rule.status === 'ok'
+    && rule.paths.length === 0
+    && seen.get(rule.absolutePath) !== rule.version)
+}
+
+/**
+ * Rules restated after a compaction: everything this agent already injected
+ * that is still usable, minus anything the always-on section already carries.
+ * @param rules - the current snapshot, in deterministic order.
+ * @param seen - rule absolute path → version already injected.
+ * @param delivered - paths already rendered in this message's always-on section.
+ * @returns rules for the replay section.
+ */
+function replayToInject(
+  rules: readonly Rule[],
+  seen: ReadonlyMap<string, string>,
+  delivered: ReadonlySet<string>,
+): Rule[] {
+  return rules.filter(rule =>
+    rule.status === 'ok' && seen.has(rule.absolutePath) && !delivered.has(rule.absolutePath))
+}
+
+/**
+ * Triggered rules this agent has not received at their current version, minus
+ * anything the replay section already restates.
+ * @param matches - pure match results for this step's touches.
+ * @param seen - rule absolute path → version already injected.
+ * @param excluded - paths rendered by another section of this same message.
+ * @returns triggered rules for the triggered section.
+ */
+function triggersToInject(
+  matches: readonly RuleMatch[],
+  seen: ReadonlyMap<string, string>,
+  excluded: ReadonlySet<string>,
+): RuleMatch[] {
+  return matches.filter(match =>
+    seen.get(match.rule.absolutePath) !== match.rule.version
+    && !excluded.has(match.rule.absolutePath))
+}
+
+/**
+ * Build one step's injection plan from the current snapshot.
+ * @param state - the agent's bookkeeping.
+ * @param snapshot - the rules discovered for this step.
+ * @param cwd - directory relative touched paths resolve against.
+ * @param startupPending - whether this is the first injection of the session.
+ * @param indexBudget - `indexMaxBytes` for the session-start index.
+ * @returns the deduplicated plan; empty sections are not rendered.
+ */
+function planInjection(
+  state: AgentRulesState,
+  snapshot: RuleSnapshot,
+  cwd: string,
+  startupPending: boolean,
+  indexBudget: number,
+): InjectionPlan {
+  const alwaysOn = alwaysOnToInject(snapshot.rules, startupPending ? NOTHING_SEEN : state.seen)
+  const delivered = new Set(alwaysOn.map(rule => rule.absolutePath))
+  const replayed = state.replayPending ? replayToInject(snapshot.rules, state.seen, delivered) : []
+  const replayedPaths = new Set(replayed.map(rule => rule.absolutePath))
+  const triggered = state.touched.size === 0
+    ? []
+    : triggersToInject(matchRules(snapshot.rules, [...state.touched], cwd), state.seen, replayedPaths)
+  return {
+    alwaysOn,
+    index: startupPending ? renderRuleIndex(snapshot.rules, indexBudget) : undefined,
+    triggered,
+    replayed,
   }
-  return [...hits].sort()
+}
+
+/**
+ * Choose the discovery refresh for this step: a full scan while startup is
+ * pending, the already-injected rules while a replay is pending, and otherwise
+ * only the touched candidates.
+ * @param state - the agent's bookkeeping.
+ * @param startupPending - whether this is the first injection of the session.
+ * @returns the snapshot request.
+ */
+function snapshotRequest(state: AgentRulesState, startupPending: boolean): SnapshotRefresh {
+  if (startupPending) return { refresh: 'full' }
+  if (state.replayPending) {
+    return { refresh: 'replay', touchedPaths: [...state.touched], replayedPaths: [...state.seen.keys()] }
+  }
+  return { refresh: 'candidates', touchedPaths: [...state.touched] }
+}
+
+/**
+ * Report a dropped index once per startup.
+ * @param ctx - host context for the log.
+ * @param snapshot - rules the index was built from.
+ * @param index - rendered index text, when it fit.
+ * @param budget - `indexMaxBytes`.
+ */
+function warnIfIndexOverflow(
+  ctx: Context,
+  snapshot: RuleSnapshot,
+  index: string | undefined,
+  budget: number,
+): void {
+  if (index !== undefined || !hasIndexEntries(snapshot.rules)) return
+  ctx.logger.warn(
+    `dsh-rules: rule index for ${snapshot.projectRoot} exceeds indexMaxBytes ${budget}; `
+    + 'the index was not injected',
+  )
+}
+
+/**
+ * Fold the reminder right after the claimed batch, before the driver-appended
+ * runtime context: the direct prompt precedes the injected convention.
+ * @param decision - the step decision to extend.
+ * @param messages - the batch this step claimed.
+ * @param text - rendered reminder body.
+ * @returns a decision carrying the reminder message.
+ */
+function foldReminder(
+  decision: Extract<PreStepDecision, { kind: 'enter' }>,
+  messages: readonly UserMessage[],
+  text: string,
+): PreStepDecision {
+  const desired = createUserMessage({
+    content: [{ type: 'text', text }],
+    source: { kind: 'dsh-rules', form: 'instructions' },
+  })
+  const lastClaimedIndex = decision.messages.findLastIndex(message => messages.includes(message))
+  return { ...decision, messages: decision.messages.toSpliced(lastClaimedIndex + 1, 0, desired) }
+}
+
+/**
+ * Whether this agent has anything to inject on this step: startup still owed,
+ * paths touched since the last injection, or a replay pending.
+ * @param state - the agent's bookkeeping, when it has one.
+ * @returns true when the step needs a snapshot.
+ */
+function awaitingInjection(state: AgentRulesState | undefined): boolean {
+  if (state === undefined) return true
+  return !state.startupDelivered || state.touched.size > 0 || state.replayPending
 }
 
 /**
@@ -145,9 +308,10 @@ export function apply(ctx: Context, config: RulesConfig): void {
   ctx.on('tools/result', (exec: Readonly<ToolExecution>, result: Readonly<ToolExecutionResult>) => {
     if (result.isError) return
     if (exec.agent === undefined || exec.signal.aborted) return
-    // Only root executions own the model-visible action; PTC sub-dispatches
-    // inherit their transport execution's outcome and add no separate trigger.
-    if (exec.parent !== undefined) return
+    // Nested PTC sub-dispatches are real successful tools too: a `read` or
+    // `edit` inside `run_code` touched the same file for the same agent, so it
+    // counts like a model-direct call. Both shapes converge on the same
+    // per-agent touch set, which deduplicates.
     const agent = exec.agent
     const filePath = filePathFromExecution(exec)
     if (filePath !== undefined) {
@@ -175,9 +339,7 @@ export function apply(ctx: Context, config: RulesConfig): void {
   ): Promise<PreStepDecision> => {
     const decision = await next()
     const state = states.get(agent)
-    const hasTouches = state !== undefined && state.touched.size > 0
-    const replayPending = state?.replayPending === true
-    if (state?.startupDelivered === true && !hasTouches && !replayPending) return decision
+    if (!awaitingInjection(state)) return decision
     // Keep the context pending across a no-step turn instead of turning it into
     // a standalone request of its own.
     if (decision.kind === 'reject' || (step === 1 && decision.messages.length === 0)) return decision
@@ -185,41 +347,13 @@ export function apply(ctx: Context, config: RulesConfig): void {
     const active = state ?? stateFor(agent)
     const cwd = await ctx.workingDirectory.ensure(agent, signal)
     signal.throwIfAborted()
-    const snapshot = await active.workspace.snapshot(cwd)
-    signal.throwIfAborted()
     const startupPending = !active.startupDelivered
-    let indexText: string | undefined
-    const alwaysOn: Rule[] = []
-    if (startupPending) {
-      alwaysOn.push(...snapshot.rules.filter(rule => rule.status === 'ok' && rule.paths.length === 0))
-      indexText = renderRuleIndex(snapshot.rules, resolved.indexMaxBytes)
-      if (indexText === undefined && hasIndexEntries(snapshot.rules)) {
-        ctx.logger.warn(
-          `dsh-rules: rule index for ${snapshot.projectRoot} exceeds indexMaxBytes ${resolved.indexMaxBytes}; `
-          + 'the index was not injected',
-        )
-      }
-    }
-    // Replay re-reads the current snapshot: a deleted or now-invalid rule is
-    // skipped, and a changed rule enters in its new version.
-    const replayed: Rule[] = []
-    if (active.replayPending) {
-      for (const rule of snapshot.rules) {
-        if (rule.status === 'ok' && active.seen.has(rule.absolutePath)) replayed.push(rule)
-      }
-    }
-    const replayedPaths = new Set(replayed.map(rule => rule.absolutePath))
-    const triggered: TriggeredRule[] = []
-    if (hasTouches) {
-      const touched = [...active.touched]
-      for (const rule of matchRules(snapshot.rules, touched, cwd)) {
-        if (replayedPaths.has(rule.absolutePath)) continue
-        if (active.seen.get(rule.absolutePath) === rule.version) continue
-        triggered.push({ rule, triggeredBy: triggeringPaths(rule, touched, cwd) })
-      }
-    }
-    const text = renderReminder({ alwaysOn, index: indexText, triggered, replayed }, snapshot.projectRoot)
-    if (hasTouches) active.touched.clear()
+    const snapshot = await active.workspace.snapshot(cwd, snapshotRequest(active, startupPending))
+    signal.throwIfAborted()
+    const plan = planInjection(active, snapshot, cwd, startupPending, resolved.indexMaxBytes)
+    if (startupPending) warnIfIndexOverflow(ctx, snapshot, plan.index, resolved.indexMaxBytes)
+    const text = renderReminder(plan, snapshot.projectRoot)
+    active.touched.clear()
     active.replayPending = false
     if (text === undefined) {
       // Nothing to deliver: a failed index is reported once above, and an
@@ -227,21 +361,11 @@ export function apply(ctx: Context, config: RulesConfig): void {
       if (startupPending) active.startupDelivered = true
       return decision
     }
-    const desired = createUserMessage({
-      content: [{ type: 'text', text }],
-      source: { kind: 'dsh-rules', form: 'instructions' },
-    })
-    // Fold the message right after the claimed batch, before the driver-appended
-    // runtime context: the direct prompt precedes the injected convention.
-    const lastClaimedIndex = decision.messages.findLastIndex(message => messages.includes(message))
-    const entered = decision.messages.toSpliced(lastClaimedIndex + 1, 0, desired)
-    if (startupPending) {
-      active.startupDelivered = true
-      for (const rule of alwaysOn) active.seen.set(rule.absolutePath, rule.version)
-    }
-    for (const entry of triggered) active.seen.set(entry.rule.absolutePath, entry.rule.version)
+    for (const rule of plan.alwaysOn) active.seen.set(rule.absolutePath, rule.version)
+    for (const entry of plan.triggered) active.seen.set(entry.rule.absolutePath, entry.rule.version)
     // Re-marking the replay as seen keeps the next trigger from repeating it.
-    for (const rule of replayed) active.seen.set(rule.absolutePath, rule.version)
-    return { ...decision, messages: entered }
+    for (const rule of plan.replayed) active.seen.set(rule.absolutePath, rule.version)
+    if (startupPending) active.startupDelivered = true
+    return foldReminder(decision, messages, text)
   })
 }

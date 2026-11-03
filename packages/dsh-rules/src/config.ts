@@ -55,13 +55,15 @@ export const Config: Schema<Config> = Schema.object({
     .description('Re-inject previously injected rules on the step after a session compaction.'),
 })
 
-/** Configuration normalized for discovery and injection. */
-export interface ResolvedConfig {
+/**
+ * Configuration normalized for discovery and injection.
+ *
+ * Derived from {@link Config} so a new option is a schema edit, not a fourth
+ * place to remember: only `roots` changes shape here.
+ */
+export type ResolvedConfig = Omit<Config, 'roots'> & {
+  /** Rule roots with reserved names dropped and duplicates collapsed. */
   roots: string[]
-  maxBytes: number
-  indexMaxBytes: number
-  includeBashReads: boolean
-  replayAfterCompaction: boolean
 }
 
 const RESERVED_ROOT_SEGMENTS: ReadonlySet<string> = new Set(['', '.', '..'])
@@ -76,10 +78,7 @@ const RESERVED_ROOT_SEGMENTS: ReadonlySet<string> = new Set(['', '.', '..'])
  */
 export function resolveConfig(config: Config): ResolvedConfig {
   return {
+    ...config,
     roots: [...new Set(config.roots.filter(root => !RESERVED_ROOT_SEGMENTS.has(root)))],
-    maxBytes: config.maxBytes,
-    indexMaxBytes: config.indexMaxBytes,
-    includeBashReads: config.includeBashReads,
-    replayAfterCompaction: config.replayAfterCompaction,
   }
 }

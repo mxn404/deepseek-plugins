@@ -16,13 +16,13 @@ import TokenMeter from '@deepseek-ai/dsh-token-meter'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   countOccurrences,
-  createRulesHarness,
   requestText,
   textResponse,
   toolCallResponse,
   type RulesHarness,
 } from './support/harness.ts'
-import { createRepo, runTurn, scopedRule, writeFileIn } from './support/project.ts'
+import { createRulesFixture, type RulesConfigOverrides } from './support/fixture.ts'
+import { runTurn, scopedRule, writeFileIn } from './support/project.ts'
 
 /** Long enough that the mandatory closed history is compactable. */
 const LONG_PROMPT = 'older conversation history '.repeat(60)
@@ -34,13 +34,9 @@ class StubCompactionEngine extends BasicCompactionEngine {
   }
 }
 
-const roots: string[] = []
-const harnesses: RulesHarness[] = []
+const fixture = createRulesFixture()
 
-afterEach(async () => {
-  for (const harness of harnesses.splice(0)) await harness.ctx.fiber.dispose()
-  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true })
-})
+afterEach(() => fixture.cleanup())
 
 interface Fixture {
   readonly root: string
@@ -54,17 +50,15 @@ interface Fixture {
  * A repo with one always-on and one path-scoped rule, a mounted TokenMeter, and
  * a manual compaction engine. `scripts` come after the three seeding turns.
  */
-async function fixture(
-  config: Parameters<typeof createRulesHarness>[1],
+async function setupCompaction(
+  config: RulesConfigOverrides,
   scripts: Parameters<RulesHarness['registerAdapter']>[1],
 ): Promise<Fixture> {
-  const root = await createRepo()
-  roots.push(root)
+  const root = await fixture.repo()
   await writeFileIn(root, '.dsh/rules/base.md', '# Base rules\n\nALWAYS-ON-PROBE\n')
   await writeFileIn(root, '.dsh/rules/src.md', scopedRule('src/**', 'SCOPED-PROBE'))
   await writeFileIn(root, 'src/app.ts', 'export const app = 1\n')
-  const harness = await createRulesHarness(root, config)
-  harnesses.push(harness)
+  const harness = await fixture.harness(root, config)
   await harness.ctx.plugin(TokenMeter)
   const compact = new StubCompactionEngine(harness.ctx, { auto: false })
   const adapter = harness.registerAdapter('mock', scripts)
@@ -95,7 +89,7 @@ function compactionScripts(): Parameters<RulesHarness['registerAdapter']>[1] {
 
 describe('compaction replay', () => {
   it('re-injects every previously injected rule on the step after a compaction', async () => {
-    const { adapter, agent, compact } = await fixture({}, compactionScripts())
+    const { adapter, agent, compact } = await setupCompaction({}, compactionScripts())
     await seedRuleInjections(agent)
     await seedLongHistory(agent)
 
@@ -117,7 +111,7 @@ describe('compaction replay', () => {
   })
 
   it('replays from the current snapshot: changed rules enter new, deleted rules are skipped', async () => {
-    const { root, adapter, agent, compact } = await fixture({}, compactionScripts())
+    const { root, adapter, agent, compact } = await setupCompaction({}, compactionScripts())
     await seedRuleInjections(agent)
     await seedLongHistory(agent)
     await compact.compactNow(agent, new AbortController().signal)
@@ -133,7 +127,7 @@ describe('compaction replay', () => {
   })
 
   it('does not replay again on later steps after the one replay', async () => {
-    const { adapter, agent, compact } = await fixture({}, [
+    const { adapter, agent, compact } = await setupCompaction({}, [
       ...compactionScripts(),
       toolCallResponse('read-2', 'read', { file_path: 'src/app.ts' }),
       textResponse('final turn done'),
@@ -150,7 +144,7 @@ describe('compaction replay', () => {
   })
 
   it('does not duplicate rules when no compaction happened', async () => {
-    const { adapter, agent } = await fixture({}, compactionScripts())
+    const { adapter, agent } = await setupCompaction({}, compactionScripts())
     await seedRuleInjections(agent)
     await seedLongHistory(agent)
     await runTurn(agent, 'after compaction')
@@ -162,11 +156,9 @@ describe('compaction replay', () => {
   })
 
   it('replays nothing when no rule was ever injected', async () => {
-    const root = await createRepo()
-    roots.push(root)
+    const root = await fixture.repo()
     await writeFileIn(root, 'src/app.ts', 'export const app = 1\n')
-    const harness = await createRulesHarness(root)
-    harnesses.push(harness)
+    const harness = await fixture.harness(root)
     await harness.ctx.plugin(TokenMeter)
     const compact = new StubCompactionEngine(harness.ctx, { auto: false })
     const adapter = harness.registerAdapter('mock', [
@@ -188,7 +180,7 @@ describe('compaction replay', () => {
   })
 
   it('does not replay when replayAfterCompaction is false', async () => {
-    const { adapter, agent, compact } = await fixture({ replayAfterCompaction: false }, compactionScripts())
+    const { adapter, agent, compact } = await setupCompaction({ replayAfterCompaction: false }, compactionScripts())
     await seedRuleInjections(agent)
     await seedLongHistory(agent)
 

@@ -2,12 +2,18 @@
  * Rule discovery: project-root detection, recursive rule-root traversal, and a
  * stat-validated cache so a session only re-reads content that changed.
  *
+ * Discovery always re-lists the rule roots, so a rule file created mid-session
+ * is found on the next batch. What it does NOT do is stat every known file on
+ * every batch: {@link RuleWorkspace.snapshot} distinguishes a `full` refresh
+ * (session start, where everything is validated) from a `candidates` refresh
+ * (a trigger batch, where only rules that could matter are re-validated).
+ *
  * @module dsh-rules/discover
  */
 
 import { readdir, readFile, realpath, stat } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
-import { buildRule, failedRule, orderRules, ruleIdentity, type Rule } from './rule.ts'
+import { buildRule, failedRule, orderRules, ruleIdentity, ruleRelativePath, type Rule } from './rule.ts'
 
 /** Project-root marker: the nearest ancestor containing it is the project root. */
 const PROJECT_ROOT_MARKER = '.git'
@@ -16,6 +22,13 @@ interface CachedRule {
   mtimeMs: number
   size: number
   rule: Rule
+}
+
+/** One discoverable rule file and the roots that own it. */
+interface RuleFile {
+  readonly file: string
+  readonly ruleRoot: string
+  readonly baseDir: string
 }
 
 /** One discovery result for a working directory. */
@@ -27,6 +40,26 @@ export interface RuleSnapshot {
   /** Rules ordered from the furthest ancestor to the nearest, then by path. */
   readonly rules: Rule[]
 }
+
+/**
+ * How much of the cached rule set one snapshot re-validates.
+ *
+ * `full` reads and stats every rule file (session start). `candidates` reads
+ * new files, then stats only rules whose cached content could matter for this
+ * batch: pathless rules (they may become injectable always-on rules) and
+ * path-scoped rules whose cached matchers hit a touched file. Everything else
+ * is reused from cache without touching the filesystem. `replay` additionally
+ * re-validates the rules this session already injected, so a changed or
+ * deleted rule resolves from its current content.
+ */
+export type SnapshotRefresh =
+  | { readonly refresh: 'full' }
+  | { readonly refresh: 'candidates'; readonly touchedPaths: readonly string[] }
+  | {
+    readonly refresh: 'replay'
+    readonly touchedPaths: readonly string[]
+    readonly replayedPaths: readonly string[]
+  }
 
 /** Options for {@link RuleWorkspace}. */
 export interface RuleWorkspaceOptions {
@@ -76,7 +109,6 @@ export function ancestorChain(root: string, cwd: string): string[] {
   while (current !== resolvedRoot) {
     chain.push(current)
     const parent = dirname(current)
-    /* v8 ignore next -- findProjectRoot always returns cwd or one of its ancestors. */
     if (parent === current) break
     current = parent
   }
@@ -137,9 +169,9 @@ async function listMarkdownFiles(dir: string, visited: Set<string>): Promise<str
 /**
  * Per-agent rule workspace: discovery plus a stat-validated content cache.
  *
- * Callers take one {@link snapshot} at session start (for always-on rules and
- * the index) and one {@link snapshot} per trigger batch. Unchanged files are
- * reused; only new or changed candidate files are read again.
+ * Callers take one `full` {@link snapshot} at session start (for always-on
+ * rules and the index), then one `candidates` snapshot per trigger batch and
+ * one `replay` snapshot per post-compaction step.
  */
 export class RuleWorkspace {
   private readonly cache = new Map<string, CachedRule>()
@@ -189,11 +221,30 @@ export class RuleWorkspace {
   }
 
   /**
-   * Discover the rules that apply to one working directory.
-   * @param cwd - the agent's working directory.
-   * @returns the ordered snapshot.
+   * Whether a cached rule must be re-validated for this trigger batch.
+   *
+   * A pathless rule is always a candidate: its content decides whether it is an
+   * injectable always-on rule. A path-scoped rule is a candidate only when its
+   * cached matchers hit a touched file; a rule whose scope was broadened
+   * mid-session is therefore not noticed until a `full` or `replay` refresh.
+   * @param rule - cached rule.
+   * @param touched - resolved absolute touched paths.
+   * @returns true when the rule must be stat-validated.
    */
-  async snapshot(cwd: string): Promise<RuleSnapshot> {
+  private isCandidate(rule: Rule, touched: readonly string[]): boolean {
+    if (rule.paths.length === 0) return true
+    return touched.some((path) => {
+      const rel = ruleRelativePath(rule.baseDir, path)
+      return rel !== undefined && rule.matchers.some(matcher => matcher.test(rel))
+    })
+  }
+
+  /**
+   * List the rule files in scope for one working directory.
+   * @param cwd - the agent's working directory.
+   * @returns the project root and the de-duplicated rule files with their roots.
+   */
+  private async discover(cwd: string): Promise<{ projectRoot: string; files: RuleFile[] }> {
     const projectRoot = await findProjectRoot(cwd)
     const directories = ancestorChain(projectRoot, cwd)
     const ruleRoots: { ruleRoot: string; baseDir: string }[] = []
@@ -206,7 +257,7 @@ export class RuleWorkspace {
         ruleRoots.push({ ruleRoot, baseDir: directory })
       }
     }
-    const files: { file: string; ruleRoot: string; baseDir: string }[] = []
+    const files: RuleFile[] = []
     const seenFiles = new Set<string>()
     for (const { ruleRoot, baseDir } of ruleRoots) {
       const found = await listMarkdownFiles(ruleRoot, new Set())
@@ -216,13 +267,54 @@ export class RuleWorkspace {
         files.push({ file, ruleRoot, baseDir })
       }
     }
+    return { projectRoot, files }
+  }
+
+  /**
+   * Re-validate or reuse one discovered rule file.
+   * @param entry - the file and its roots.
+   * @param request - how much this snapshot re-validates.
+   * @param touched - resolved absolute touched paths.
+   * @param replayed - absolute rule paths that a replay must re-validate.
+   * @returns the current rule, or `undefined` when the file vanished.
+   */
+  private async refreshRule(
+    entry: RuleFile,
+    request: SnapshotRefresh,
+    touched: readonly string[],
+    replayed: ReadonlySet<string>,
+  ): Promise<Rule | undefined> {
+    const cached = this.cache.get(entry.file)
+    const validate = request.refresh === 'full'
+      || cached === undefined
+      || replayed.has(entry.file)
+      || this.isCandidate(cached.rule, touched)
+    if (validate) return this.load(entry.file, entry.ruleRoot, entry.baseDir)
+    // A candidate-less cached rule is reused untouched: no stat, no read.
+    return cached.rule
+  }
+
+  /**
+   * Discover the rules that apply to one working directory.
+   * @param cwd - the agent's working directory.
+   * @param request - refresh mode for this snapshot; defaults to a full scan.
+   * @returns the ordered snapshot.
+   */
+  async snapshot(cwd: string, request: SnapshotRefresh = { refresh: 'full' }): Promise<RuleSnapshot> {
+    const { projectRoot, files } = await this.discover(cwd)
+    const touched = request.refresh === 'full'
+      ? []
+      : request.touchedPaths.map(path => resolve(cwd, path))
+    const replayed = new Set(request.refresh === 'replay' ? request.replayedPaths : [])
     const rules: Rule[] = []
     for (const entry of files) {
-      const rule = await this.load(entry.file, entry.ruleRoot, entry.baseDir)
+      const rule = await this.refreshRule(entry, request, touched, replayed)
       if (rule !== undefined) rules.push(rule)
     }
+    // A rule file that disappeared (or moved out of scope) leaves the cache too.
+    const listed = new Set(files.map(entry => entry.file))
     for (const file of this.cache.keys()) {
-      if (!seenFiles.has(file)) this.cache.delete(file)
+      if (!listed.has(file)) this.cache.delete(file)
     }
     return { cwd: resolve(cwd), projectRoot, rules: orderRules(rules, projectRoot) }
   }

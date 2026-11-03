@@ -6,37 +6,30 @@
  * trigger must be invisible for any command whose touched file cannot be proven.
  */
 
-import { rm } from 'node:fs/promises'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   countOccurrences,
-  createRulesHarness,
   requestText,
   textResponse,
   toolCallResponse,
-  type RulesHarness,
 } from './support/harness.ts'
-import { bashToolCall, createRepo, runTurn, scopedRule, writeFileIn } from './support/project.ts'
+import { createRulesFixture, type RulesConfigOverrides } from './support/fixture.ts'
+import { bashToolCall, runTurn, scopedRule, writeFileIn } from './support/project.ts'
 
-const roots: string[] = []
-const harnesses: RulesHarness[] = []
+const fixture = createRulesFixture()
 
-afterEach(async () => {
-  for (const harness of harnesses.splice(0)) await harness.ctx.fiber.dispose()
-  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true })
-})
+afterEach(() => fixture.cleanup())
 
+/** A project root seeded with one source file the rules can scope to. */
 async function repo(): Promise<string> {
-  const root = await createRepo()
-  roots.push(root)
+  const root = await fixture.repo()
   await writeFileIn(root, 'src/app.ts', 'export const APP = 1\n')
   return root
 }
 
-async function harnessFor(root: string, config: Parameters<typeof createRulesHarness>[1] = {}): Promise<RulesHarness> {
-  const harness = await createRulesHarness(root, config, { bash: true })
-  harnesses.push(harness)
-  return harness
+/** Mount the real bash stack next to the rules plugin. */
+async function bashHarness(root: string, config: RulesConfigOverrides = {}) {
+  return fixture.harness(root, config, { bash: true })
 }
 
 describe('shell single-file read triggers', () => {
@@ -49,7 +42,7 @@ describe('shell single-file read triggers', () => {
   ])('injects a path-scoped rule after `%s`', async (_name, command) => {
     const root = await repo()
     await writeFileIn(root, '.dsh/rules/src.md', scopedRule('src/**', 'SHELL-SCOPED-PROBE'))
-    const harness = await harnessFor(root)
+    const harness = await bashHarness(root)
     const adapter = harness.registerAdapter('mock', [
       bashToolCall('bash-1', command),
       textResponse('done'),
@@ -69,7 +62,7 @@ describe('shell single-file read triggers', () => {
   it('resolves a relative file against the bash call `workdir`', async () => {
     const root = await repo()
     await writeFileIn(root, '.dsh/rules/src.md', scopedRule('src/**', 'WORKDIR-PROBE'))
-    const harness = await harnessFor(root)
+    const harness = await bashHarness(root)
     const adapter = harness.registerAdapter('mock', [
       bashToolCall('bash-1', 'cat app.ts', { workdir: 'src' }),
       textResponse('done'),
@@ -96,7 +89,7 @@ describe('shell single-file read triggers', () => {
     const root = await repo()
     await writeFileIn(root, 'src/other.ts', 'export const OTHER = 1\n')
     await writeFileIn(root, '.dsh/rules/src.md', scopedRule('src/**', 'NEGATIVE-PROBE'))
-    const harness = await harnessFor(root)
+    const harness = await bashHarness(root)
     const adapter = harness.registerAdapter('mock', [
       bashToolCall('bash-1', command),
       textResponse('done'),
@@ -113,7 +106,7 @@ describe('shell single-file read triggers', () => {
     const root = await repo()
     await writeFileIn(root, 'docs/readme.md', 'outside\n')
     await writeFileIn(root, '.dsh/rules/src.md', scopedRule('src/**', 'OUTSIDE-PROBE'))
-    const harness = await harnessFor(root)
+    const harness = await bashHarness(root)
     const adapter = harness.registerAdapter('mock', [
       bashToolCall('bash-1', 'cat docs/readme.md'),
       textResponse('done'),
@@ -128,7 +121,7 @@ describe('shell single-file read triggers', () => {
   it('stops honoring shell reads when includeBashReads is false, while read still triggers', async () => {
     const root = await repo()
     await writeFileIn(root, '.dsh/rules/src.md', scopedRule('src/**', 'BASH-TOGGLE-PROBE'))
-    const harness = await harnessFor(root, { includeBashReads: false })
+    const harness = await bashHarness(root, { includeBashReads: false })
     const adapter = harness.registerAdapter('mock', [
       bashToolCall('bash-1', 'cat src/app.ts'),
       textResponse('first turn done'),
