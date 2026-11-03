@@ -145,3 +145,16 @@ Git 细节。
 `zustand`/`immer` 在发布清单里只写在 devDependencies（所以本包自己也装了这两个）；
 `dsh-client-ui-primitives` 同样漏声明了整条工具链，测试里把它 mock 到实际渲染到的
 Tooltip。
+
+## 发布
+
+`prepare` 会在 npm 打包前跑 tsdown，所以发布出去的是预构建产物，用户
+`dsh plugin add dsh-worktree-switch` 无需构建授权：
+
+```sh
+pnpm --filter dsh-worktree-switch publish --access public
+```
+
+包元数据里的 `repository.directory` 指向本仓库的这个子目录，收录到社区目录
+（awesome-dsh-plugin / dsh-market）后 npm 包会自动关联回仓库；收录步骤见仓库根
+README 的「社区目录」一节。

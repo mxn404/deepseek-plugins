@@ -1,9 +1,10 @@
 {
   "name": "dsh-worktree-switch",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A New Session switch that puts the conversation into a throwaway Git worktree under the project's worktree pool (`<project>/.dsh/worktrees` by default), plus a panel to inspect and discard the copies.",
   "keywords": [
     "dsh",
+    "dsh-plugin",
     "deepseek-harness",
     "plugin",
     "git",
@@ -33,7 +34,7 @@
   ],
   "engines": {
     "node": "^22.19.0 || >=24.0.0",
-    "dsh": ">=0.2.1-rc.5"
+    "dsh": ">=0.2.1-rc.5 <0.2.2-0"
   },
   "dsh": {
     "manifestVersion": 1,
@@ -58,20 +59,20 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",
-    "@deepseek-ai/dsh-api-session-controller": ">=0.2.1-rc.5 <0.3.0-0",
-    "@deepseek-ai/dsh-api-workspace-controller": ">=0.2.1-rc.5 <0.3.0-0",
-    "@deepseek-ai/dsh-client-connection": ">=0.2.1-rc.5 <0.3.0-0",
-    "@deepseek-ai/dsh-client-locale": ">=0.2.1-rc.5 <0.3.0-0",
-    "@deepseek-ai/dsh-client-store": ">=0.2.1-rc.5 <0.3.0-0",
-    "@deepseek-ai/dsh-client-ui-conversation": ">=0.2.1-rc.5 <0.3.0-0",
-    "@deepseek-ai/dsh-client-ui-layout": ">=0.2.1-rc.5 <0.3.0-0",
-    "@deepseek-ai/dsh-client-ui-primitives": ">=0.2.1-rc.5 <0.3.0-0",
-    "@deepseek-ai/dsh-client-ui-renderer": ">=0.2.1-rc.5 <0.3.0-0",
-    "@deepseek-ai/dsh-client-ui-session": ">=0.2.1-rc.5 <0.3.0-0",
-    "@deepseek-ai/dsh-client-ui-sidebar": ">=0.2.1-rc.5 <0.3.0-0",
-    "@deepseek-ai/dsh-client-ui-slots": ">=0.2.1-rc.5 <0.3.0-0",
-    "@deepseek-ai/dsh-client-ui-workspace": ">=0.2.1-rc.5 <0.3.0-0",
-    "@deepseek-ai/dsh-experimental-worktree": ">=0.2.1-rc.5 <0.3.0-0",
+    "@deepseek-ai/dsh-api-session-controller": ">=0.2.1-rc.5 <0.2.2-0",
+    "@deepseek-ai/dsh-api-workspace-controller": ">=0.2.1-rc.5 <0.2.2-0",
+    "@deepseek-ai/dsh-client-connection": ">=0.2.1-rc.5 <0.2.2-0",
+    "@deepseek-ai/dsh-client-locale": ">=0.2.1-rc.5 <0.2.2-0",
+    "@deepseek-ai/dsh-client-store": ">=0.2.1-rc.5 <0.2.2-0",
+    "@deepseek-ai/dsh-client-ui-conversation": ">=0.2.1-rc.5 <0.2.2-0",
+    "@deepseek-ai/dsh-client-ui-layout": ">=0.2.1-rc.5 <0.2.2-0",
+    "@deepseek-ai/dsh-client-ui-primitives": ">=0.2.1-rc.5 <0.2.2-0",
+    "@deepseek-ai/dsh-client-ui-renderer": ">=0.2.1-rc.5 <0.2.2-0",
+    "@deepseek-ai/dsh-client-ui-session": ">=0.2.1-rc.5 <0.2.2-0",
+    "@deepseek-ai/dsh-client-ui-sidebar": ">=0.2.1-rc.5 <0.2.2-0",
+    "@deepseek-ai/dsh-client-ui-slots": ">=0.2.1-rc.5 <0.2.2-0",
+    "@deepseek-ai/dsh-client-ui-workspace": ">=0.2.1-rc.5 <0.2.2-0",
+    "@deepseek-ai/dsh-experimental-worktree": ">=0.2.1-rc.5 <0.2.2-0",
     "@deepseek-ai/schemastery": "^3.18.2"
   },
   "devDependencies": {
@@ -123,5 +124,12 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "prepare": "tsdown"
+  },
+  "author": "mxn404",
+  "homepage": "https://github.com/mxn404/deepseek-plugins/tree/main/packages/dsh-worktree-switch",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mxn404/deepseek-plugins.git",
+    "directory": "packages/dsh-worktree-switch"
   }
 }

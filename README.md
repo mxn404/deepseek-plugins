@@ -165,6 +165,35 @@ git 源还要求包已提交且工作区干净：索引钉的是 commit，未提
 - **包名必须归你所有**：注册表按包名查版本，名字被别人占用就会列到对方的包。生成索引时
   会核对最新版本的 `repository`，与本仓库不一致会告警——看到告警就先改名，别让用户装错。
 
+**4. 社区目录（awesome-dsh-plugin / dsh-market）**
+
+Web GUI 里常见的第三方「插件市场」（`dshmarket`）不读本地索引，读的是
+`awesome-dsh-plugin/awesome-dsh-plugin` 仓库生成的目录。收录方式就是一个 PR，只加一个
+YAML 文件，没有上传接口：
+
+```
+data/plugins/<owner>__<repo>.yml
+```
+
+```yaml
+url: https://github.com/owner/repo        # monorepo 子包用 /tree/main/packages/<name>
+name: owner/repo                          # 子包用 owner/repo#<name>
+category: git
+description:
+  en: One accurate sentence about what it does, ending with a period.
+  zh: 一句话描述，以句号结尾。             # 可选，维护者会补
+# icon: https://raw.githubusercontent.com/owner/repo/main/<路径>/icon-180.png
+```
+
+硬门槛（CI 自动检查）：包在**仓库根或 `packages/` · `plugins/` · `apps/` 子包**里声明
+`dsh.bundle`；仓库创建满 **1 天**；仓库带 `dsh-plugin` topic；一个 PR 最多 3 条。
+人工评审会读源码核对描述，并判断是否与已有条目重复——描述只写真实行为。
+
+**先发 npm 再提交收录**：目录当前全部是 npm 源，装了 npm 包才有预构建安装与下载量；
+未发布时条目仍然可用，但用户要过一次 `allowBuilds`。包里的 `repository` 字段要指回被
+收录的那个仓库（含 `directory`），npm 包与条目才会自动关联。合并后夜间构建刷新目录，
+市场里可见；之后发新版无需再提 PR。
+
 ### 版本与标签
 
 多插件版本各自独立，用 changesets 管理：
