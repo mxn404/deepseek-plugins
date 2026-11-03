@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "规则",
+    "description": "把 .dsh/rules 里的 markdown 约定按当前碰到的文件注入 agent 上下文，只在需要时到场。"
+  }
+}
