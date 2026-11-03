@@ -21,13 +21,13 @@ export interface Config {
   /** Byte budget of the session-start rule index; overflow degrades the index. */
   indexMaxBytes: number
   /**
-   * Whether conservative single-file shell reads count as triggers. Consumed by
-   * the shell-trigger slice; accepted here so profiles can pin it already.
+   * Whether conservative single-file shell reads count as triggers. Shell
+   * commands whose touched file cannot be proven are never triggers.
    */
   includeBashReads: boolean
   /**
-   * Whether injected rules are replayed after a session compaction. Consumed by
-   * the compaction slice; accepted here so profiles can pin it already.
+   * Whether already-injected rules are re-injected after a session compaction,
+   * so the summary does not silently erase the conventions.
    */
   replayAfterCompaction: boolean
 }
@@ -49,17 +49,19 @@ export const Config: Schema<Config> = Schema.object({
     .description('Byte budget of the session-start rule index. Overflow drops titles, then paths, then the index itself.'),
   includeBashReads: Schema.boolean()
     .default(true)
-    .description('Treat conservative single-file shell reads as triggers. Takes effect with the shell-trigger slice.'),
+    .description('Treat conservative single-file shell reads as triggers. Unprovable shell shapes never trigger.'),
   replayAfterCompaction: Schema.boolean()
     .default(true)
-    .description('Re-inject rules after a session compaction. Takes effect with the compaction slice.'),
+    .description('Re-inject previously injected rules on the step after a session compaction.'),
 })
 
-/** Configuration normalized for discovery. */
+/** Configuration normalized for discovery and injection. */
 export interface ResolvedConfig {
   roots: string[]
   maxBytes: number
   indexMaxBytes: number
+  includeBashReads: boolean
+  replayAfterCompaction: boolean
 }
 
 const RESERVED_ROOT_SEGMENTS: ReadonlySet<string> = new Set(['', '.', '..'])
@@ -77,5 +79,7 @@ export function resolveConfig(config: Config): ResolvedConfig {
     roots: [...new Set(config.roots.filter(root => !RESERVED_ROOT_SEGMENTS.has(root)))],
     maxBytes: config.maxBytes,
     indexMaxBytes: config.indexMaxBytes,
+    includeBashReads: config.includeBashReads,
+    replayAfterCompaction: config.replayAfterCompaction,
   }
 }

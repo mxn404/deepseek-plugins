@@ -23,6 +23,11 @@ export const ALWAYS_ON_INTRO = 'The following repository rules apply to this wor
 export const TRIGGER_INTRO = 'The following repository rules apply to files you just touched. '
   + 'Use them as guidance when applicable. They do not override system, developer, or direct user instructions.'
 
+/** Intro shown before rule bodies replayed after a conversation compaction. */
+export const REPLAY_INTRO = 'The following repository rules were loaded earlier in this session and are restated '
+  + 'here because the conversation was compacted. Use them as guidance when applicable. '
+  + 'They do not override system, developer, or direct user instructions.'
+
 /** Intro shown before the session-start rule index. */
 export const INDEX_INTRO = 'Repository rule index: path-scoped rules load automatically '
   + 'when you read, write, or edit a matching file.'
@@ -38,6 +43,7 @@ export interface ReminderContent {
   readonly alwaysOn: readonly Rule[]
   readonly index: string | undefined
   readonly triggered: readonly TriggeredRule[]
+  readonly replayed: readonly Rule[]
 }
 
 function byteLength(value: string): number {
@@ -122,9 +128,18 @@ function triggeredSection(entry: TriggeredRule, projectRoot: string): string {
   ].join('\n')
 }
 
+function replayedSection(rule: Rule, projectRoot: string): string {
+  return [
+    `Repository rule (replayed): ${rule.name}`,
+    `Source: ${displayPath(projectRoot, rule.absolutePath)}`,
+    '',
+    rule.body,
+  ].join('\n')
+}
+
 /**
  * Render one injection message body inside the host's reminder frame.
- * @param content - always-on rules, index text, and triggered rules.
+ * @param content - always-on rules, index text, triggered rules, and replayed rules.
  * @param projectRoot - display base for source and triggering paths.
  * @returns the framed message text, or `undefined` when there is nothing to say.
  */
@@ -141,6 +156,12 @@ export function renderReminder(content: ReminderContent, projectRoot: string): s
     blocks.push([
       TRIGGER_INTRO,
       ...content.triggered.map(entry => triggeredSection(entry, projectRoot)),
+    ].join('\n\n'))
+  }
+  if (content.replayed.length > 0) {
+    blocks.push([
+      REPLAY_INTRO,
+      ...content.replayed.map(rule => replayedSection(rule, projectRoot)),
     ].join('\n\n'))
   }
   if (blocks.length === 0) return undefined

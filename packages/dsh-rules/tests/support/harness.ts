@@ -9,11 +9,17 @@
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
+import { LocalBashExecutor } from '@deepseek-ai/dsh-bash-local'
 import type { Context } from '@deepseek-ai/cordis'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
+import LocalJobRegistry from '@deepseek-ai/dsh-jobs-local'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import * as BashEnvPlugin from '@deepseek-ai/dsh-shell-env'
+import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
+import * as ToolBash from '@deepseek-ai/dsh-tool-bash'
 import * as ToolFs from '@deepseek-ai/dsh-tool-fs'
+import * as ToolJobs from '@deepseek-ai/dsh-tool-jobs'
 import { Context as CordisContext } from '@deepseek-ai/cordis'
 import { vi } from 'vitest'
 import * as DshRules from '../../src/index.ts'
@@ -30,19 +36,35 @@ export interface RulesHarness {
   createAgent(route: string, cwd?: string): Promise<Agent>
 }
 
+/** Optional real-service stacks a test wants mounted next to the plugin. */
+export interface RulesHarnessOptions {
+  /** Mount the real bash tool stack (jobs, subprocess, shell env, executor, tool). */
+  readonly bash?: boolean
+}
+
 /**
  * Mount the real loop, filesystem tools, the rules plugin, and an AgentLoop.
  * @param root - project root the mounted filesystem starts in.
  * @param config - row config overrides; every omitted field takes its schema default.
+ * @param options - optional extra real-service stacks.
  * @returns the harness.
  */
 export async function createRulesHarness(
   root: string,
   config: Partial<DshRules.Config> = {},
+  options: RulesHarnessOptions = {},
 ): Promise<RulesHarness> {
   const ctx = new CordisContext()
   await mountAgentLoopTestDependencies(ctx, { workingDirectory: true })
   await ctx.plugin(ToolFs)
+  if (options.bash === true) {
+    await ctx.plugin(LocalJobRegistry)
+    await ctx.plugin(ToolJobs)
+    await ctx.plugin(LocalSubprocessRuntime)
+    await ctx.plugin(BashEnvPlugin, {})
+    await ctx.plugin(LocalBashExecutor, { timeoutMs: 20_000 })
+    await ctx.plugin(ToolBash)
+  }
   // The Loader/schema supplies every default, so the harness only passes overrides.
   await ctx.plugin(DshRules, config as DshRules.Config)
   await ctx.plugin(AgentLoop, { agents: [] })
