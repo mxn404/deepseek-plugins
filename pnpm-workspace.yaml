@@ -6,3 +6,18 @@
 # To keep a helper package out of the market, leave it without `dsh.bundle`.
 packages:
   - packages/*
+
+# Dependency install scripts this workspace decides about explicitly.
+#
+# `dsh-worktree-toggle`'s host tests drive the real subprocess provider to run
+# Git, so `@deepseek-ai/dsh-subprocess-local` arrives as a devDependency and
+# brings its native terminal dependencies with it. The tests only use that
+# provider's plain spawn path, so the postinstall helper and the koffi/node-pty
+# bindings are never needed. `false` records that decision: pnpm 11 blocks
+# dependency build scripts by default and treats an *undeclared* one as an
+# install error (which is what a CI `--frozen-lockfile` run reports), while a
+# declared `false` is an answered question.
+allowBuilds:
+  '@deepseek-ai/dsh-subprocess-local': false
+  koffi: false
+  node-pty: false
