@@ -1,0 +1,17 @@
+# The configuration layers this bundle contributes to a dsh profile.
+#
+# Row one mounts the harness worktree service this plugin drives. Its id is
+# deliberately the same `worktree` id the in-box @deepseek-ai/dsh-experimental-tool-worktree
+# bundle uses: a profile that already mounts the model-facing worktree tool
+# overrides this row instead of registering the `worktrees` service twice
+# (Cordis throws on a duplicate service name).
+- insert:
+    - id: worktree
+      name: '@deepseek-ai/dsh-experimental-worktree'
+      config:
+        # The pool must stay inside the project root: a session's sandbox grant
+        # is its immutable start directory, so a pool outside it could not be
+        # written. This restates the service default so an override is obvious.
+        directory: '.agents/worktrees'
+    - id: dsh-worktree-toggle
+      name: 'dsh-worktree-toggle'

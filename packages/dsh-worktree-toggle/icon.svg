@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="dsh worktree toggle">
+  <rect width="64" height="64" rx="14" fill="#1f6feb"/>
+  <path d="M20 17v20a6 6 0 0 0 6 6h13" fill="none" stroke="#ffffff" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="20" cy="14" r="4" fill="#ffffff"/>
+  <circle cx="20" cy="50" r="4" fill="#ffffff"/>
+  <circle cx="44" cy="43" r="4" fill="#ffffff"/>
+  <path d="M34 24h10M34 24v14" fill="none" stroke="#ffffff" stroke-width="4" stroke-linecap="round" stroke-dasharray="3 4"/>
+</svg>

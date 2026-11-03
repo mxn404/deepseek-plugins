@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Worktree 开关",
+    "description": "在新会话屏幕上勾选即把对话放进一份全新的 Git worktree，并提供面板查看与丢弃这些副本。"
+  }
+}
