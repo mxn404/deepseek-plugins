@@ -1,5 +1,5 @@
 /**
- * Harness for the browser half of the Worktree toggle.
+ * Harness for the browser half of the Worktree switch.
  *
  * Why this file exists instead of `SlotTestRuntime`: the published bench
  * `@deepseek-ai/dsh-client-test-runtime@0.2.1-rc.5` imports
@@ -159,7 +159,7 @@ export type HostVerb = 'status' | 'prepare' | 'list' | 'discard'
 export interface HostCall {
   /** Channel the call went to (`/api`). */
   readonly channel: string
-  /** Full endpoint, e.g. `dsh-worktree-toggle/status`. */
+  /** Full endpoint, e.g. `dsh-worktree-switch/status`. */
   readonly endpoint: string
   /** Verb parsed from {@link HostCall.endpoint}. */
   readonly verb: HostVerb

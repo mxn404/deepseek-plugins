@@ -1,5 +1,5 @@
 /**
- * Real-service harness for the Worktree toggle host half.
+ * Real-service harness for the Worktree switch host half.
  *
  * Adapted from the harness behind `packages/experimental/worktree` in
  * deepseek-harness: a real Cordis Context, real temp Git repositories, and the
@@ -75,7 +75,7 @@ export class UnusedSandbox extends SandboxProvider {
  * @param name - Agent and Session identity; defaults to one per test.
  * @returns the registered Agent.
  */
-export function testAgent(ctx: Context, cwd: string, name = 'worktree-toggle-test'): Agent {
+export function testAgent(ctx: Context, cwd: string, name = 'worktree-switch-test'): Agent {
   const scope = ctx.plugin(() => {})
   const id = SessionId(name)
   const session = Session.create(id, [], {
@@ -117,12 +117,12 @@ export interface RepositoryOptions {
  * @returns the canonical repository root.
  */
 export async function repository(options: RepositoryOptions = {}, parent = tmpdir()): Promise<string> {
-  const path = await realpath(await mkdtemp(join(parent, 'dsh-worktree-toggle-')))
+  const path = await realpath(await mkdtemp(join(parent, 'dsh-worktree-switch-')))
   try {
     await git(path, 'init', '-b', 'main')
     await git(path, 'config', 'core.autocrlf', 'false')
-    await git(path, 'config', 'user.name', 'Worktree toggle fixture')
-    await git(path, 'config', 'user.email', 'worktree-toggle@example.invalid')
+    await git(path, 'config', 'user.name', 'Worktree switch fixture')
+    await git(path, 'config', 'user.email', 'worktree-switch@example.invalid')
     await git(path, 'config', 'commit.gpgSign', 'false')
     if (options.commits === false) return path
     await writeFile(join(path, 'tracked.txt'), 'initial\n')
@@ -141,7 +141,7 @@ export async function repository(options: RepositoryOptions = {}, parent = tmpdi
  * @returns the canonical directory.
  */
 export async function temporaryDirectory(parent = tmpdir()): Promise<string> {
-  return realpath(await mkdtemp(join(parent, 'dsh-worktree-toggle-')))
+  return realpath(await mkdtemp(join(parent, 'dsh-worktree-switch-')))
 }
 
 /**

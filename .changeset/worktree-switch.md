@@ -1,8 +1,8 @@
 ---
-'dsh-worktree-toggle': minor
+'dsh-worktree-switch': minor
 ---
 
-Add the Worktree toggle plugin: a New Session switch that creates a throwaway Git
+Add the Worktree switch plugin: a New Session switch that creates a throwaway Git
 worktree under `<project>/.agents/worktrees/<name>` and moves the session into it,
 plus a Worktrees panel that lists the copies and discards them (checkout and branch,
 after refusing a copy with uncommitted changes). The host half mounts

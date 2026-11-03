@@ -6,7 +6,7 @@
  * Git, the worktree service, the sandbox policy it applies, and session
  * working-directory publication — belongs to the harness and is exercised by
  * its own tests.
- * @module dsh-worktree-toggle/host/handlers
+ * @module dsh-worktree-switch/host/handlers
  */
 
 import { stat } from 'node:fs/promises'

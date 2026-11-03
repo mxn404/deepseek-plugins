@@ -7,7 +7,7 @@
  * the one logical channel the API Gateway owns, so `rpc.handle` refuses it and
  * a second `rpc.intercept` throws. Every route below answers owner peers only,
  * which is what the local Web GUI is.
- * @module dsh-worktree-toggle/host/routes
+ * @module dsh-worktree-switch/host/routes
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -17,10 +17,10 @@ import type { DiscardValue, ListValue, PrepareValue, StatusValue, WorktreeToggle
 import { WorktreeToggleError } from './handlers.ts'
 
 /** Absolute prefix every route below lives under. */
-export const API_PREFIX = '/api/dsh-worktree-toggle'
+export const API_PREFIX = '/api/dsh-worktree-switch'
 
 /** Plugin id; the wire method prefix and the package name are the same string. */
-export const PLUGIN_ID = 'dsh-worktree-toggle'
+export const PLUGIN_ID = 'dsh-worktree-switch'
 
 /** One route per verb. */
 export const ENDPOINTS = ['status', 'prepare', 'list', 'discard'] as const

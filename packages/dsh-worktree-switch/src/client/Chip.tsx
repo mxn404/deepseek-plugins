@@ -7,7 +7,7 @@
  * recognises it: a session whose list summary says blank and whose history is
  * open. Outside that state this component renders nothing at all — the spec's
  * "no greyed remnant" — and it releases the composer block it raised.
- * @module dsh-worktree-toggle/client/Chip
+ * @module dsh-worktree-switch/client/Chip
  */
 
 import { useEffect, type ReactElement } from 'react'

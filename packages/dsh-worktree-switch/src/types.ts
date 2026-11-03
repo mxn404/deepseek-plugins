@@ -4,7 +4,7 @@
  * Both halves are built separately; these are the only values that cross
  * between them, so they live in one module and nothing here imports Node or
  * React.
- * @module dsh-worktree-toggle/types
+ * @module dsh-worktree-switch/types
  */
 
 /** One existing copy, as both halves name it. */

@@ -1,6 +1,6 @@
 /**
  * Copy for the switch and the panel, in both shipped locales.
- * @module dsh-worktree-toggle/client/locales
+ * @module dsh-worktree-switch/client/locales
  */
 
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
@@ -28,7 +28,7 @@ export const en = {
   'chip.blocked.creating': 'Creating the worktree before the first prompt…',
   'chip.blocked.failed': 'The worktree could not be created. Retry, turn the switch off, or discard the failed copy first.',
   'panel.title': 'Worktrees',
-  'panel.subtitle': 'Copies created by the Worktree toggle: one checkout and one branch each. Discard removes both.',
+  'panel.subtitle': 'Copies created by the Worktree switch: one checkout and one branch each. Discard removes both.',
   'panel.refresh': 'Refresh',
   'panel.back': 'Back',
   'panel.loading': 'Reading worktrees…',

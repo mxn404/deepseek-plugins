@@ -1,7 +1,7 @@
 {
-  "name": "dsh-worktree-toggle",
+  "name": "dsh-worktree-switch",
   "version": "0.1.0",
-  "description": "Worktree toggle: a New Session switch that puts the conversation into a throwaway Git worktree under <project>/.agents/worktrees, plus a panel to inspect and discard the copies.",
+  "description": "A New Session switch that puts the conversation into a throwaway Git worktree under <project>/.agents/worktrees, plus a panel to inspect and discard the copies.",
   "keywords": [
     "dsh",
     "deepseek-harness",

@@ -1,4 +1,4 @@
-# `dsh-worktree-toggle`
+# `dsh-worktree-switch`
 
 在新会话屏幕的输入框工具行里放一个 **Worktree 开关**。默认打开（按项目记忆）：
 打开时立刻在 `<项目根>/.agents/worktrees/<名字>` 建一份仓库副本，并把这条会话的工作
@@ -26,15 +26,15 @@
 
 ```sh
 # 本地 checkout
-dsh plugin --profile web add /home/ubuntu/code/deepseek-plugins/packages/dsh-worktree-toggle
-dsh --profile web --dump-config    # 应能看到 "# == dsh-worktree-toggle" 和 "# == worktree" 两层
+dsh plugin --profile web add /home/ubuntu/code/deepseek-plugins/packages/dsh-worktree-switch
+dsh --profile web --dump-config    # 应能看到 "# == dsh-worktree-switch" 和 "# == worktree" 两层
 ```
 
 `cordis.patch.yml` 会插入两行：`@deepseek-ai/dsh-experimental-worktree`（提供
 `ctx.worktrees`，行 id 特意用 `worktree`，与官方 tool-worktree bundle 的行 id 相同，避免
 重复注册服务）和本插件自己。装完需要重启正在运行的 Web profile。
 
-构建产物由 `prepare` 脚本（tsdown）产出；改完源码后重新 `pnpm --filter dsh-worktree-toggle build`
+构建产物由 `prepare` 脚本（tsdown）产出；改完源码后重新 `pnpm --filter dsh-worktree-switch build`
 即可。外部安装的插件不在 `pnpm run dev:web` 的监视范围内，client-hmr 每 500ms 轮询
 `lib/client.js`，重新构建后页面会自动换上新的浏览器半。
 
@@ -81,7 +81,7 @@ dsh --profile web --dump-config    # 应能看到 "# == dsh-worktree-toggle" 和
 ## 实现
 
 宿主半（`src/index.ts`）只做两件事：拿 `cordis.patch.yml` 挂上的 `ctx.worktrees` 和
-`ctx.sessionController`，把四个动词注册成 `/api/dsh-worktree-toggle/<verb>` 上的精确
+`ctx.sessionController`，把四个动词注册成 `/api/dsh-worktree-switch/<verb>` 上的精确
 Fetch 路由（`src/host/routes.ts`），说 `client-request` / `server-response` 信封：
 
 | 动词 | 入参 | 行为 |
@@ -99,8 +99,8 @@ Fetch 路由（`src/host/routes.ts`），说 `client-request` / `server-response
 ## 校验
 
 ```sh
-pnpm --filter dsh-worktree-toggle typecheck
-pnpm --filter dsh-worktree-toggle test
+pnpm --filter dsh-worktree-switch typecheck
+pnpm --filter dsh-worktree-switch test
 pnpm build          # 构建全部包并校验 exports / bundle patch 文件存在
 ```
 

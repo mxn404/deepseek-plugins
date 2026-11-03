@@ -2,7 +2,7 @@
  * Names for the copy a session gets: lowercase words and a short suffix, so a
  * branch, a directory, a `git branch` row and this plugin's UI all read the
  * same. No prefix: `…/.agents/worktrees/<name>` already says where it lives.
- * @module dsh-worktree-toggle/host/naming
+ * @module dsh-worktree-switch/host/naming
  */
 
 /** First word of a generated name. */

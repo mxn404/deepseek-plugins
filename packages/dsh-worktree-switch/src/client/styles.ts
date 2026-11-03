@@ -4,11 +4,11 @@
  * Surfaces already own typography and colour; this sheet only lays out the
  * switch and the panel and borrows `currentColor` for every line, so it stays
  * legible in both themes without owning a palette.
- * @module dsh-worktree-toggle/client/styles
+ * @module dsh-worktree-switch/client/styles
  */
 
 /** Marker attribute identifying this plugin's style element. */
-const STYLE_ATTRIBUTE = 'data-dsh-worktree-toggle-style'
+const STYLE_ATTRIBUTE = 'data-dsh-worktree-switch-style'
 
 /** The whole sheet. */
 const CSS = `

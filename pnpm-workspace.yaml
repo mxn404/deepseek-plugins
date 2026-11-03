@@ -9,7 +9,7 @@ packages:
 
 # Dependency install scripts this workspace decides about explicitly.
 #
-# `dsh-worktree-toggle`'s host tests drive the real subprocess provider to run
+# `dsh-worktree-switch`'s host tests drive the real subprocess provider to run
 # Git, so `@deepseek-ai/dsh-subprocess-local` arrives as a devDependency and
 # brings its native terminal dependencies with it. The tests only use that
 # provider's plain spawn path, so the postinstall helper and the koffi/node-pty

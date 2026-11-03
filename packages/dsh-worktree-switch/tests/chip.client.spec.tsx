@@ -69,18 +69,18 @@ describe('switch registration', () => {
 
     const chips = harness.slots.entries('conversation.input.left')
     expect(chips).toHaveLength(1)
-    expect(chips[0]!.options.id).toBe('dsh-worktree-toggle')
+    expect(chips[0]!.options.id).toBe('dsh-worktree-switch')
     expect(chips[0]!.options.order).toBe(40)
     expect(chips[0]!.locale).toBe('worktreeToggle')
 
     const panels = harness.slots.entries('main')
     expect(panels).toHaveLength(1)
-    expect(panels[0]!.options.key).toBe('dsh-worktree-toggle')
+    expect(panels[0]!.options.key).toBe('dsh-worktree-switch')
     expect(panels[0]!.locale).toBe('worktreeToggle')
 
     const sidebar = harness.slots.entries('sidebar.panellist')
     expect(sidebar).toHaveLength(1)
-    expect(sidebar[0]!.options.id).toBe('dsh-worktree-toggle')
+    expect(sidebar[0]!.options.id).toBe('dsh-worktree-switch')
     expect(sidebar[0]!.options.order).toBe(30)
     expect(resolveSlotLabel(sidebar[0]!.options.label)).toBe('Worktrees')
 
@@ -174,7 +174,7 @@ describe('default on', () => {
     const prepares = harness.connection.callsFor('prepare')
     expect(prepares).toHaveLength(1)
     expect(prepares[0]!.payload).toEqual({ sessionId: SESSION })
-    expect(prepares[0]!.endpoint).toBe('dsh-worktree-toggle/prepare')
+    expect(prepares[0]!.endpoint).toBe('dsh-worktree-switch/prepare')
 
     expect(chip.getAttribute('data-hint')).toContain(`Branch ${COPY.branch}`)
     expect(chip.getAttribute('data-hint')).toContain(COPY.path)

@@ -1,5 +1,5 @@
 /**
- * Host-half spec for the Worktree toggle.
+ * Host-half spec for the Worktree switch.
  *
  * Every case drives `createWorktreeToggle` over real services and asserts only
  * externally observable behavior: directories and branches on disk, the

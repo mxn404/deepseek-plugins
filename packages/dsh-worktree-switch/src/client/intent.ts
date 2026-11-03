@@ -7,11 +7,11 @@
  * browser's user, not of the repository or the session log, and the two
  * alternatives (a host endpoint, the settings service) would add a round trip
  * to a decision that must be available before the switch can render.
- * @module dsh-worktree-toggle/client/intent
+ * @module dsh-worktree-switch/client/intent
  */
 
 /** One storage key holds the whole map, so a project deletion cannot orphan entries. */
-const STORAGE_KEY = 'dsh-worktree-toggle:intent'
+const STORAGE_KEY = 'dsh-worktree-switch:intent'
 
 /** Remembered choices, keyed by repository root path. */
 type IntentMap = Record<string, boolean>
@@ -51,7 +51,7 @@ export function writeIntent(project: string, enabled: boolean): void {
     globalThis.localStorage?.setItem(STORAGE_KEY, JSON.stringify(next))
   } catch {
     // Storage is optional: a refused write costs one remembered preference, not
-    // the toggle, so the switch keeps working for this page's lifetime.
+    // the switch, so it keeps working for this page's lifetime.
   }
 }
 

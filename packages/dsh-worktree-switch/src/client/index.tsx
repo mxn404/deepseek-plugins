@@ -1,5 +1,5 @@
 /**
- * Browser half of the Worktree toggle.
+ * Browser half of the Worktree switch.
  *
  * Three registrations, all on the page's real slot registry:
  * - the switch, into `conversation.input.left` (the compact controls left of
@@ -9,7 +9,7 @@
  *
  * The two controllers live for the plugin fiber: unloading the plugin drops
  * every contribution, every composer block, and every in-flight read.
- * @module dsh-worktree-toggle/client
+ * @module dsh-worktree-switch/client
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -27,13 +27,13 @@ import { PanelController, ToggleController } from './state.ts'
 import { installStyles } from './styles.ts'
 
 /** Browser module id: package name, bundle row id, plugin id. */
-export const name = 'dsh-worktree-toggle'
+export const name = 'dsh-worktree-switch'
 
 /** Locale namespace this plugin owns. */
 export const NS = 'worktreeToggle'
 
 /** Keyed `main` panel id; the sidebar entry's list id is the same string. */
-export const PANEL_ID = 'dsh-worktree-toggle' as MainPanelId
+export const PANEL_ID = 'dsh-worktree-switch' as MainPanelId
 
 /**
  * Client services this plugin cannot work without.
@@ -48,8 +48,8 @@ export const inject = ['conversation', 'connection', 'layout', 'locale', 'slots'
  * @param ctx - browser Cordis context.
  */
 export function apply(ctx: Context): void {
-  ctx.effect(() => ctx.locale.register(NS, { en, zh }), 'dsh-worktree-toggle: dictionaries')
-  ctx.effect(installStyles, 'dsh-worktree-toggle: styles')
+  ctx.effect(() => ctx.locale.register(NS, { en, zh }), 'dsh-worktree-switch: dictionaries')
+  ctx.effect(installStyles, 'dsh-worktree-switch: styles')
 
   const t = ctx.locale.bind(NS)
   const toggles = new ToggleController(ctx)
@@ -57,7 +57,7 @@ export function apply(ctx: Context): void {
   ctx.effect(() => () => {
     toggles.dispose()
     panels.dispose()
-  }, 'dsh-worktree-toggle: controllers')
+  }, 'dsh-worktree-switch: controllers')
 
   ctx.slots.inject('conversation.input.left', () => ctx.slots.register({
     name: 'conversation.input.left',

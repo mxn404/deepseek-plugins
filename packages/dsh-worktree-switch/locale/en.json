@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "Worktree Toggle",
+    "title": "Worktree Switch",
     "description": "A New Session switch that runs the conversation in a throwaway Git worktree, plus a panel to inspect and discard the copies."
   }
 }

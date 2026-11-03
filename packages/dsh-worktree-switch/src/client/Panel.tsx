@@ -6,7 +6,7 @@
  * offers here: nothing merges, nothing is reclaimed automatically, and a copy
  * with uncommitted changes is refused by the host, not hidden by a disabled
  * button alone.
- * @module dsh-worktree-toggle/client/Panel
+ * @module dsh-worktree-switch/client/Panel
  */
 
 import { useEffect, useRef, useState, type ReactElement } from 'react'

@@ -1,12 +1,12 @@
 /**
- * Host half of the Worktree toggle.
+ * Host half of the Worktree switch.
  *
  * It mounts no service itself: the bundle patch inserts the harness worktree
  * service (`@deepseek-ai/dsh-experimental-worktree`, which provides
  * `ctx.worktrees`) and this plugin's own row. This plugin exposes four verbs
  * over the Connection fetch bridge and drives that service for creation; the
  * browser half renders the switch and the panel.
- * @module dsh-worktree-toggle
+ * @module dsh-worktree-switch
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -19,7 +19,7 @@ import { POOL_DIRECTORY, createWorktreeToggle } from './host/handlers.ts'
 import { registerWorktreeRoutes } from './host/routes.ts'
 
 /** Plugin id: package name, bundle row id, browser module id. */
-export const name = 'dsh-worktree-toggle'
+export const name = 'dsh-worktree-switch'
 
 /**
  * Services this plugin cannot work without.

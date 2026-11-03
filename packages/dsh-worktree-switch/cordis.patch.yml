@@ -13,5 +13,5 @@
         # is its immutable start directory, so a pool outside it could not be
         # written. This restates the service default so an override is obvious.
         directory: '.agents/worktrees'
-    - id: dsh-worktree-toggle
-      name: 'dsh-worktree-toggle'
+    - id: dsh-worktree-switch
+      name: 'dsh-worktree-switch'

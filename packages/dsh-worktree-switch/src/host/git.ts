@@ -8,7 +8,7 @@
  * the same UI just listed. They therefore spawn Git directly, the same way the
  * installed `dsh-worktree-space` plugin does, instead of borrowing a session's
  * policy for an operation no session asked for.
- * @module dsh-worktree-toggle/host/git
+ * @module dsh-worktree-switch/host/git
  */
 
 import { realpath } from 'node:fs/promises'

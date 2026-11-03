@@ -4,7 +4,7 @@
  * One object per job, each owning a snapshot store the slot component reads
  * through the framework's selector hook. Nothing here renders, so the behavior
  * is testable without React and the components stay dumb.
- * @module dsh-worktree-toggle/client/state
+ * @module dsh-worktree-switch/client/state
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -99,7 +99,7 @@ export class ToggleController {
 
   /** Clear every composer block this controller raised. */
   dispose(): void {
-    this.lifetime.abort(new Error('worktree toggle unloaded'))
+    this.lifetime.abort(new Error('worktree switch unloaded'))
     for (const binding of this.bindings.values()) binding.block(null)
     this.bindings.clear()
   }
@@ -369,6 +369,6 @@ export class PanelController {
 
   /** Abort in-flight reads when the plugin unloads. */
   dispose(): void {
-    this.lifetime.abort(new Error('worktree toggle unloaded'))
+    this.lifetime.abort(new Error('worktree switch unloaded'))
   }
 }
