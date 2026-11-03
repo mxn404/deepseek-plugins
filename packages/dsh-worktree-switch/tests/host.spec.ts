@@ -11,9 +11,9 @@ import { basename, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { POOL_DIRECTORY, WorktreeToggleError, createWorktreeToggle } from '../src/host/handlers.ts'
+import { WorktreeToggleError, createWorktreeToggle } from '../src/host/handlers.ts'
 import type { WorktreeToggle } from '../src/host/handlers.ts'
-import { git, harness, repository, temporaryDirectory, testAgent } from './harness.ts'
+import { POOL_DIRECTORY, git, harness, repository, temporaryDirectory, testAgent } from './harness.ts'
 
 let ctx: Context | undefined
 const roots: string[] = []
@@ -41,7 +41,7 @@ interface Fixture {
 async function fixture(root: string, startDirectory = root, defaultEnabled = true): Promise<Fixture> {
   ctx = await harness(root)
   const agent = testAgent(ctx, startDirectory)
-  const toggle = createWorktreeToggle(ctx, { defaultEnabled, poolDirectory: POOL_DIRECTORY })
+  const toggle = createWorktreeToggle(ctx, { defaultEnabled })
   return { ctx, agent, toggle }
 }
 
@@ -117,12 +117,7 @@ describe('worktree toggle status', () => {
     const listed = await toggle.list({ path: root })
 
     expect(status).toMatchObject({ supported: true, defaultEnabled: false })
-    expect(listed).toEqual({
-      supported: true,
-      repositoryRoot: root,
-      poolPath: join(root, POOL_DIRECTORY),
-      items: [],
-    })
+    expect(listed).toEqual({ supported: true, repositoryRoot: root, items: [] })
     await expect(stat(join(root, POOL_DIRECTORY))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 })
@@ -175,7 +170,6 @@ describe('worktree toggle prepare', () => {
     expect(status).toMatchObject({
       supported: true,
       repositoryRoot: root,
-      poolPath: join(root, POOL_DIRECTORY),
       sessionWorktree: null,
     })
     expect(prepared.repositoryRoot).toBe(root)
@@ -205,11 +199,7 @@ describe('worktree toggle list', () => {
 
     const listed = await toggle.list({ path: root })
 
-    expect(listed).toMatchObject({
-      supported: true,
-      repositoryRoot: root,
-      poolPath: join(root, POOL_DIRECTORY),
-    })
+    expect(listed).toMatchObject({ supported: true, repositoryRoot: root })
     if (!listed.supported) throw new Error('expected a supported list')
     expect(listed.items).toHaveLength(1)
     const item = listed.items[0]
@@ -276,7 +266,7 @@ describe('worktree toggle discard', () => {
     const invalid = await failureOf(() => toggle.discard({ path: root, name: '../x' }))
 
     expect(missing.code).toBe('worktree-not-found')
-    expect(missing.details).toMatchObject({ name: 'unknown-copy', poolPath: join(root, POOL_DIRECTORY) })
+    expect(missing.details).toMatchObject({ name: 'unknown-copy', repositoryRoot: root })
     expect(invalid.code).toBe('worktree-name-invalid')
     expect((await stat(prepared.worktree.path)).isDirectory()).toBe(true)
     expect(await git(root, 'branch', '--list', prepared.worktree.branch)).toContain(prepared.worktree.name)

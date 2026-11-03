@@ -11,7 +11,9 @@
       config:
         # The pool must stay inside the project root: a session's sandbox grant
         # is its immutable start directory, so a pool outside it could not be
-        # written. This restates the service default so an override is obvious.
-        directory: '.agents/worktrees'
+        # written. This row is the one place the directory is configured —
+        # override `directory` in your profile patch to move it (the plugin
+        # itself follows whatever this service uses).
+        directory: '.dsh/worktrees'
     - id: dsh-worktree-switch
       name: 'dsh-worktree-switch'

@@ -23,8 +23,6 @@ export type StatusValue =
     readonly supported: true
     /** Root of the Git repository the session's project belongs to. */
     readonly repositoryRoot: string
-    /** Absolute pool directory inside that root. */
-    readonly poolPath: string
     /** The copy this session already runs in, or null. */
     readonly sessionWorktree: WorktreeRef | null
     /** Changed and untracked files in the source checkout. */
@@ -44,8 +42,6 @@ export type PrepareValue = {
   readonly state: 'created' | 'existing'
   readonly worktree: WorktreeRef
   readonly repositoryRoot: string
-  /** Pool directory the copy lives in; absent replies leave the status value in place. */
-  readonly poolPath?: string
   readonly sourceDirty: number
 }
 
@@ -64,7 +60,6 @@ export type ListValue =
   | {
     readonly supported: true
     readonly repositoryRoot: string
-    readonly poolPath: string
     readonly items: readonly WorktreeItem[]
   }
   | {

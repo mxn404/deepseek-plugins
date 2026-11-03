@@ -9,8 +9,8 @@
  * @module dsh-worktree-switch/host/handlers
  */
 
-import { stat } from 'node:fs/promises'
-import { basename, dirname, join, resolve } from 'node:path'
+import { lstat, stat } from 'node:fs/promises'
+import { basename, isAbsolute, relative, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
@@ -34,9 +34,6 @@ import {
   runGit,
 } from './git.ts'
 import { isWorktreeName, worktreeName } from './naming.ts'
-
-/** Relative pool inside the source repository; the harness service default. */
-export const POOL_DIRECTORY = '.agents/worktrees'
 
 /** Attempts at a fresh name before a creation failure becomes an error. */
 const CREATE_ATTEMPTS = 3
@@ -71,8 +68,6 @@ export class WorktreeToggleError extends Error {
 export interface WorktreeToggleOptions {
   /** Default for a project nothing has remembered yet. */
   readonly defaultEnabled: boolean
-  /** Relative pool directory; defaults to {@link POOL_DIRECTORY}. */
-  readonly poolDirectory?: string | undefined
 }
 
 /** The host face the route layer exposes over the Connection fetch bridge. */
@@ -120,17 +115,30 @@ function absolutePath(value: string): string {
 }
 
 /**
- * The copy a session already runs in, when its working directory is one pool
- * entry below the pool.
+ * The copy a session already runs in.
+ *
+ * A linked worktree is recognised from the checkout itself — its `.git` is a
+ * file pointing back at the source repository, not a directory — rather than
+ * from any configured pool path. The pool belongs to the harness worktree
+ * service, so this plugin never needs a second copy of that setting: moving the
+ * pool in the service's row config keeps every verb working.
  * @param current - the session's committed working directory.
- * @param poolPath - absolute pool directory.
- * @returns the copy's identity, or null when the directory is elsewhere.
+ * @param repositoryRoot - canonical root of the project's repository.
+ * @returns the copy's identity, or null when the directory is not one.
  */
-function worktreeAt(current: string, poolPath: string): WorktreeRef | null {
-  if (dirname(current) !== poolPath) return null
-  const name = basename(current)
+async function worktreeAt(current: string, repositoryRoot: string): Promise<WorktreeRef | null> {
+  const path = await canonicalPath(current)
+  if (path === repositoryRoot) return null
+  const inside = relative(repositoryRoot, path)
+  if (inside === '' || inside.startsWith('..') || isAbsolute(inside)) return null
+  const name = basename(path)
   if (!isWorktreeName(name)) return null
-  return { name, path: current, branch: name }
+  try {
+    if (!(await lstat(`${path}/.git`)).isFile()) return null
+  } catch {
+    return null
+  }
+  return { name, path, branch: name }
 }
 
 /**
@@ -140,7 +148,6 @@ function worktreeAt(current: string, poolPath: string): WorktreeRef | null {
  * @returns the four verbs.
  */
 export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOptions): WorktreeToggle {
-  const poolDirectory = options.poolDirectory ?? POOL_DIRECTORY
   /** One in-flight preparation per session, so a double mount cannot create twice. */
   const pending = new Map<string, Promise<PrepareValue>>()
 
@@ -166,16 +173,16 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
     return agent
   }
 
-  const projectOf = async (
-    directory: string,
-    signal?: AbortSignal,
-  ): Promise<{ repositoryRoot: string; poolPath: string }> => {
-    // Git reports the spelling of the path it was given; the worktree service
-    // publishes canonical paths, so both halves must agree on one spelling or a
-    // session already inside a copy would not be recognised as such.
-    const root = await canonicalPath(await repositoryRoot(ctx, directory, signal))
-    return { repositoryRoot: root, poolPath: join(root, poolDirectory) }
-  }
+  /**
+   * Resolve the canonical root of the repository that contains a directory.
+   * Git reports the spelling of the path it was given; the worktree service
+   * publishes canonical paths, so both halves must agree on one spelling.
+   * @param directory - absolute directory inside the project.
+   * @param signal - caller cancellation.
+   * @returns the canonical repository root.
+   */
+  const repositoryOf = async (directory: string, signal?: AbortSignal): Promise<string> =>
+    canonicalPath(await repositoryRoot(ctx, directory, signal))
 
   const status = async (
     request: { readonly sessionId: string },
@@ -185,9 +192,9 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
     // The immutable creation directory is the project anchor; the committed
     // working directory may already be a copy this session entered.
     const startDirectory = agent.session.header.cwd ?? ctx.workingDirectory.get(agent.session)
-    let project: { repositoryRoot: string; poolPath: string }
+    let root: string
     try {
-      project = await projectOf(startDirectory, signal)
+      root = await repositoryOf(startDirectory, signal)
     } catch (error) {
       if (error instanceof GitFailure) {
         return { supported: false, reason: 'not-a-git-repository', defaultEnabled: options.defaultEnabled }
@@ -196,12 +203,11 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
     }
     const current = ctx.workingDirectory.get(agent.session)
     signal?.throwIfAborted()
-    const sourceDirty = await changedFileCount(ctx, project.repositoryRoot, signal)
+    const sourceDirty = await changedFileCount(ctx, root, signal)
     return {
       supported: true,
-      repositoryRoot: project.repositoryRoot,
-      poolPath: project.poolPath,
-      sessionWorktree: worktreeAt(current, project.poolPath),
+      repositoryRoot: root,
+      sessionWorktree: await worktreeAt(current, root),
       sourceDirty,
       defaultEnabled: options.defaultEnabled,
     }
@@ -224,7 +230,6 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
         state: 'existing',
         worktree: current.sessionWorktree,
         repositoryRoot: current.repositoryRoot,
-        poolPath: current.poolPath,
         sourceDirty: current.sourceDirty,
       }
     }
@@ -233,12 +238,12 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
     // create when the two name different repositories: a copy in the wrong
     // project would look like success and be worse than no copy.
     const working = ctx.workingDirectory.get(agent.session)
-    const workingProject = await projectOf(working, signal)
-    if (workingProject.repositoryRoot !== current.repositoryRoot) {
+    const workingProject = await repositoryOf(working, signal)
+    if (workingProject !== current.repositoryRoot) {
       throw new WorktreeToggleError(
         'session-moved',
-        `this session now works in ${workingProject.repositoryRoot}, not in its project ${current.repositoryRoot}`,
-        { repositoryRoot: current.repositoryRoot, workingProject: workingProject.repositoryRoot },
+        `this session now works in ${workingProject}, not in its project ${current.repositoryRoot}`,
+        { repositoryRoot: current.repositoryRoot, workingProject },
       )
     }
     let lastFailure: unknown
@@ -251,7 +256,6 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
           state: 'created',
           worktree: { name: created.branch, path: created.path, branch: created.branch },
           repositoryRoot: created.repositoryRoot,
-          poolPath: join(created.repositoryRoot, poolDirectory),
           sourceDirty: current.sourceDirty,
         }
       } catch (error) {
@@ -292,40 +296,37 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
     signal?: AbortSignal,
   ): Promise<ListValue> => {
     const directory = absolutePath(request.path)
-    let project: { repositoryRoot: string; poolPath: string }
+    let root: string
     try {
-      project = await projectOf(directory, signal)
+      root = await repositoryOf(directory, signal)
     } catch (error) {
       if (error instanceof GitFailure) return { supported: false, reason: 'not-a-git-repository' }
       throw error
     }
-    const records = await listWorktreeRecords(ctx, project.repositoryRoot, signal)
+    const records = await listWorktreeRecords(ctx, root, signal)
     const items: WorktreeItem[] = []
     for (const record of records) {
       signal?.throwIfAborted()
-      if (await canonicalPath(dirname(record.path)) !== project.poolPath) continue
-      const name = basename(record.path)
+      const path = await canonicalPath(record.path)
+      // The repository's own checkout is the source, never a copy.
+      if (path === root) continue
+      const name = basename(path)
       if (!isWorktreeName(name)) continue
       const branch = record.branch ?? name
       let createdAt = 0
       let prunable = true
       try {
-        const info = await stat(record.path)
+        const info = await stat(path)
         createdAt = Math.trunc(info.birthtimeMs > 0 ? info.birthtimeMs : info.mtimeMs)
         prunable = false
       } catch {
         // The checkout directory is gone; Git still lists it until pruned.
       }
-      const changedFiles = prunable ? 0 : await changedFileCount(ctx, record.path, signal)
-      items.push({ name, path: record.path, branch, createdAt, changedFiles, prunable })
+      const changedFiles = prunable ? 0 : await changedFileCount(ctx, path, signal)
+      items.push({ name, path, branch, createdAt, changedFiles, prunable })
     }
     items.sort((left, right) => right.createdAt - left.createdAt || left.name.localeCompare(right.name))
-    return {
-      supported: true,
-      repositoryRoot: project.repositoryRoot,
-      poolPath: project.poolPath,
-      items,
-    }
+    return { supported: true, repositoryRoot: root, items }
   }
 
   const discard = async (
@@ -336,7 +337,7 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
     if (!isWorktreeName(request.name)) {
       throw new WorktreeToggleError('worktree-name-invalid', `not a worktree name: ${request.name}`)
     }
-    const project = await projectOf(directory, signal)
+    const root = await repositoryOf(directory, signal)
     const listed = await list({ path: directory }, signal)
     if (!listed.supported) {
       throw new WorktreeToggleError('not-a-git-repository', 'the project is not inside a Git working tree')
@@ -345,8 +346,8 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
     if (item === undefined) {
       throw new WorktreeToggleError(
         'worktree-not-found',
-        `no worktree named ${request.name} under ${project.poolPath}`,
-        { name: request.name, poolPath: project.poolPath },
+        `no worktree named ${request.name} in ${root}`,
+        { name: request.name, repositoryRoot: root },
       )
     }
     if (item.changedFiles > 0) {
@@ -357,9 +358,9 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
       )
     }
     if (item.prunable) {
-      await runGit(ctx, project.repositoryRoot, ['worktree', 'prune'], { signal })
+      await runGit(ctx, root, ['worktree', 'prune'], { signal })
     } else {
-      const removed = await runGit(ctx, project.repositoryRoot, ['worktree', 'remove', item.path], {
+      const removed = await runGit(ctx, root, ['worktree', 'remove', item.path], {
         signal,
         allowedExitCodes: [0, 128],
       })
@@ -371,7 +372,7 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
         )
       }
     }
-    const deleted = await runGit(ctx, project.repositoryRoot, ['branch', '-D', '--', item.branch], {
+    const deleted = await runGit(ctx, root, ['branch', '-D', '--', item.branch], {
       signal,
       allowedExitCodes: [0, 1],
     })

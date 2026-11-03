@@ -23,7 +23,7 @@ import { resolveSlotLabel } from '@deepseek-ai/dsh-client-ui-slots'
 import { en } from '../src/client/locales.ts'
 import { INTENT_STORAGE_KEY } from '../src/client/intent.ts'
 import {
-  copyRef, fail, ok, POOL, prepareValue, REPOSITORY, SESSION, setup, supportedStatus,
+  copyRef, fail, ok, prepareValue, REPOSITORY, SESSION, setup, supportedStatus,
   unsupportedStatus,
 } from './client-harness.ts'
 import type { ClientHarness, ClientSlotView } from './client-harness.ts'
@@ -142,9 +142,7 @@ describe('the creating face', () => {
     const view = renderChip(harness)
     await waitFor(() => { expect(chipOf(view).getAttribute('data-phase')).toBe('creating') })
     expect(view.view.getByText('Creating worktree…')).toBeTruthy()
-    expect(chipOf(view).getAttribute('data-hint')).toBe(
-      `Creating a checkout under ${POOL}…`,
-    )
+    expect(chipOf(view).getAttribute('data-hint')).toBe('Creating a checkout inside the project…')
     expect(harness.blocks.reasonFor()).toBe('Creating the worktree before the first prompt…')
 
     await act(async () => {

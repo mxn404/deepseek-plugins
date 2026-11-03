@@ -1,7 +1,7 @@
 # `dsh-worktree-switch`
 
 在新会话屏幕的输入框工具行里放一个 **Worktree 开关**。默认打开（按项目记忆）：
-打开时立刻在 `<项目根>/.agents/worktrees/<名字>` 建一份仓库副本，并把这条会话的工作
+打开时立刻在 `<项目根>/.dsh/worktrees/<名字>` 建一份仓库副本，并把这条会话的工作
 目录切进去；关掉时什么都不做，会话就在原目录里跑。副本不会自动消失、也不会自动合并，
 用户可以在 **Worktrees 面板**里把它丢弃，或者自己把分支合回源仓库。
 
@@ -16,9 +16,9 @@
   之后），开关通过 `ctx.conversation.blocks` 把该会话的输入框置为"暂停发送"；重试成功、
   关掉开关（确认不要隔离）或副本就绪时才解除。关掉开关是明确的退出方式——它表示"这条
   会话就在原目录里跑"，而不是假装隔离成功。
-- **面板**（侧边栏条目 + 自己的页面）：按项目列出所有副本，含名字、分支、路径、创建
-  时间和未提交改动数；丢弃需要第二次确认，且**有未提交改动时拒绝丢弃**并说明原因。
-  丢弃会删掉检出目录和分支。
+- **面板**（侧边栏条目 + 自己的页面）：按项目列出该仓库的所有 linked worktree（包括
+  手工 `git worktree add` 出来的），含名字、分支、路径、创建时间和未提交改动数；丢弃
+  需要第二次确认，且**有未提交改动时拒绝丢弃**并说明原因。丢弃会删掉检出目录和分支。
 - **会话身份不变**：会话仍然建在源项目的工作区里，起始目录不变，插件只改会话的工作
   目录（一条持久化事件，重开会话仍然生效）。
 
@@ -43,7 +43,7 @@ dsh --profile web --dump-config    # 应能看到 "# == dsh-worktree-switch" 和
 1. 重启正在跑的 Web profile。
 2. 新建会话（hero 屏幕）：输入框工具行最左侧出现 Worktree 开关；默认打开的项会先显示
    "检查中"，随即"正在创建"，然后显示这条会话的副本名。
-3. 按回车发消息：助手的工作目录已经是 `<项目根>/.agents/worktrees/<名字>`，源仓库的
+3. 按回车发消息：助手的工作目录已经是 `<项目根>/.dsh/worktrees/<名字>`，源仓库的
    未提交内容留在原地。
 4. 侧边栏出现 **Worktree** 入口：打开后按项目列出磁盘上的副本，含创建时间与未提交改动。
 5. 想丢弃一份副本：点两次 Discard（第二次是确认）；有未提交改动时按钮禁用并说明原因。
@@ -52,6 +52,36 @@ dsh --profile web --dump-config    # 应能看到 "# == dsh-worktree-switch" 和
 
 ## 配置
 
+### 副本目录
+
+副本目录（池）由 **`cordis.patch.yml` 里那一行 `worktree`** 决定，也就是 harness
+worktree 服务自己的 `directory` 选项——本插件不另存一份设置，`status` / `list` /
+`discard` 都按“仓库里有哪些 linked worktree”去认副本，所以服务把池挪到哪里，插件就
+跟到哪里。本包默认是 `.dsh/worktrees`。
+
+要改成别的目录，在 **profile 自己的 patch 层**覆盖同一行即可（后层按行 id 覆盖，整块
+`config` 替换）：
+
+```yaml
+# ~/.dsh/profiles/web/cordis.patch.yml
+- id: worktree
+  name: '@deepseek-ai/dsh-experimental-worktree'
+  config:
+    directory: worktrees          # 相对项目根；这里就会落在 <项目根>/worktrees/<名字>
+```
+
+两条硬约束：
+
+- **必须留在项目根内部**。会话的沙箱写入边界是不可变的会话起始目录，池在项目根外时
+  创建副本会被直接拒绝。
+- 目录对每个项目都生效（是相对路径，不是在某个绝对位置开池）。若想按项目不同，只能
+  在项目里放不同的 profile——目前没做这种粒度。
+
+改完重启 profile 生效。已经在旧目录里的副本不会消失：面板列的是仓库的所有 linked
+worktree，所以新旧目录的副本都会出现，可以照常丢弃。
+
+### 开关默认
+
 | 字段 | 默认 | 含义 |
 |---|---|---|
 | `defaultEnabled` | `true` | 用户从未在这个项目上拨过开关时，新会话是否默认隔离。用户拨过一次后，按项目记在浏览器 localStorage 里，优于此项。 |
@@ -59,14 +89,13 @@ dsh --profile web --dump-config    # 应能看到 "# == dsh-worktree-switch" 和
 ## 目录与命名
 
 ```
-<项目根>/.agents/worktrees/
+<项目根>/.dsh/worktrees/
 ├─ .gitignore          # worktree 服务建池时写入（内容 "*"），池本身不进版本库
 └─ quiet-harbor-3fa9/  # 一份副本；同名分支 quiet-harbor-3fa9
 ```
 
-池固定在项目根内部，**不能挪到项目根之外**：会话的沙箱写入边界来自会话起始目录，
-副本落在外面会被直接拒绝。名字不带 `wt/` 前缀——路径里的 `.agents/worktrees/` 已经
-把这件事说完了。
+名字不带 `wt/` 前缀：池路径已经把“这是什么”说清楚了。名字、分支、目录三者是同一个
+字符串，`git branch` 里看到的名字就是磁盘上的目录名。
 
 ## 已知边界（接受，不修）
 
@@ -86,9 +115,9 @@ Fetch 路由（`src/host/routes.ts`），说 `client-request` / `server-response
 
 | 动词 | 入参 | 行为 |
 |---|---|---|
-| `status` | `{ sessionId }` | 解析仓库根、池路径、本会话已有副本、源仓库未提交改动数 |
+| `status` | `{ sessionId }` | 解析仓库根、本会话是否已在某个 linked worktree 里、源仓库未提交改动数 |
 | `prepare` | `{ sessionId }` | 幂等；必要时经 `ctx.worktrees.create` 建副本并切目录，同名冲突自动换名重试 |
-| `list` | `{ path }` | 读项目的池，返回每份副本的名字/分支/路径/创建时间/改动数 |
+| `list` | `{ path }` | 列出该仓库除主检出外的所有 linked worktree，返回名字/分支/路径/创建时间/改动数 |
 | `discard` | `{ path, name }` | 干净才删：`git worktree remove` + `git branch -D`；改动非空则拒绝 |
 
 创建走 harness 的 worktree 服务（沿用它的沙箱、filter 覆盖和失败语义）；`status`/`list`/

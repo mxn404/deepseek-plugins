@@ -31,6 +31,9 @@ import WorkingDirectoryService from '@deepseek-ai/dsh-working-directory'
 
 const execute = promisify(execFile)
 
+/** Pool directory the harness mounts the worktree service with; the plugin follows it. */
+export const POOL_DIRECTORY = '.dsh/worktrees'
+
 /** Keep fixture Git off the caller's global and system configuration. */
 const GIT_ENV = {
   ...process.env,
@@ -160,7 +163,7 @@ export async function harness(root: string): Promise<Context> {
     await ctx.plugin(UnusedSandbox)
     await ctx.plugin(SandboxPolicyService, { mode: 'danger-full-access', workspaceRoot: root })
     await ctx.plugin(WorkingDirectoryService)
-    await ctx.plugin(WorktreeService, { directory: '.agents/worktrees' })
+    await ctx.plugin(WorktreeService, { directory: POOL_DIRECTORY })
     return ctx
   } catch (error) {
     await ctx.fiber.dispose()

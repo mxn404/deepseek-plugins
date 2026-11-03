@@ -54,7 +54,7 @@ export function chipHint(state: ToggleState, t: Translate): string {
   switch (state.phase) {
     case 'checking': return t('chip.hint.checking')
     case 'off': return t('chip.hint.off')
-    case 'creating': return t('chip.hint.creating', { pool: state.poolPath ?? '' })
+    case 'creating': return t('chip.hint.creating')
     case 'ready': {
       const parts = [t('chip.hint.ready', {
         branch: state.worktree?.branch ?? '',

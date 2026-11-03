@@ -187,8 +187,8 @@ export function fail(message: string, code = 'failed'): ConnectionRpcResult<unkn
 /** Default repository root every fixture uses. */
 export const REPOSITORY = '/fixtures/repo'
 
-/** Default pool path inside {@link REPOSITORY}. */
-export const POOL = `${REPOSITORY}/.agents/worktrees`
+/** Default pool path inside {@link REPOSITORY}; the service decides it now, so this only names paths. */
+export const POOL = `${REPOSITORY}/.dsh/worktrees`
 
 /** Wire session id every rendered chip binds to. */
 export const SESSION = 'session-1'
@@ -202,7 +202,7 @@ export const SESSION = 'session-1'
 export function copyRef(name = 'quiet-harbor-3fa9', repositoryRoot = REPOSITORY): WorktreeRef {
   return {
     name,
-    path: `${repositoryRoot}/.agents/worktrees/${name}`,
+    path: `${repositoryRoot}/.dsh/worktrees/${name}`,
     branch: name,
   }
 }
@@ -218,7 +218,6 @@ export function supportedStatus(
   return {
     supported: true,
     repositoryRoot: REPOSITORY,
-    poolPath: POOL,
     sessionWorktree: null,
     sourceDirty: 0,
     defaultEnabled: true,
@@ -256,7 +255,7 @@ export function prepareValue(overrides: Partial<PrepareValue> = {}): PrepareValu
  * @returns the list value.
  */
 export function listValue(items: readonly WorktreeItem[] = []): Extract<ListValue, { supported: true }> {
-  return { supported: true, repositoryRoot: REPOSITORY, poolPath: POOL, items }
+  return { supported: true, repositoryRoot: REPOSITORY, items }
 }
 
 /**

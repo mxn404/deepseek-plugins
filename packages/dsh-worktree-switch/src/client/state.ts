@@ -30,8 +30,6 @@ export interface ToggleState {
   readonly worktree: WorktreeRef | null
   /** Repository root the project belongs to, once known. */
   readonly repositoryRoot: string | null
-  /** Pool directory the copy would land in, once known. */
-  readonly poolPath: string | null
   /** Changed and untracked files in the source checkout, once known. */
   readonly sourceDirty: number
   /** Readable failure for the failed face. */
@@ -44,7 +42,6 @@ const INITIAL: ToggleState = {
   intent: false,
   worktree: null,
   repositoryRoot: null,
-  poolPath: null,
   sourceDirty: 0,
   error: null,
 }
@@ -160,7 +157,6 @@ class InternalBinding {
         intent,
         worktree: status.sessionWorktree,
         repositoryRoot: status.repositoryRoot,
-        poolPath: status.poolPath,
         sourceDirty: status.sourceDirty,
         error: null,
       }
@@ -198,7 +194,6 @@ class InternalBinding {
         phase: 'ready',
         worktree: prepared.worktree,
         repositoryRoot: prepared.repositoryRoot,
-        poolPath: prepared.poolPath ?? now.poolPath,
         sourceDirty: prepared.sourceDirty,
         error: null,
       })

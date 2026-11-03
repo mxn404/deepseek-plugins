@@ -15,7 +15,7 @@ import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-experimental-worktree'
 import type {} from '@deepseek-ai/dsh-subprocess'
 import type {} from '@deepseek-ai/dsh-working-directory'
-import { POOL_DIRECTORY, createWorktreeToggle } from './host/handlers.ts'
+import { createWorktreeToggle } from './host/handlers.ts'
 import { registerWorktreeRoutes } from './host/routes.ts'
 
 /** Plugin id: package name, bundle row id, browser module id. */
@@ -48,9 +48,6 @@ export const Config: Schema<Config> = Schema.object({
  * @param config - validated row config.
  */
 export function apply(ctx: Context, config: Config): void {
-  const toggle = createWorktreeToggle(ctx, {
-    defaultEnabled: config.defaultEnabled,
-    poolDirectory: POOL_DIRECTORY,
-  })
+  const toggle = createWorktreeToggle(ctx, { defaultEnabled: config.defaultEnabled })
   registerWorktreeRoutes(ctx, toggle)
 }

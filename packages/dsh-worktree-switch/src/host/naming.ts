@@ -1,7 +1,7 @@
 /**
  * Names for the copy a session gets: lowercase words and a short suffix, so a
  * branch, a directory, a `git branch` row and this plugin's UI all read the
- * same. No prefix: `…/.agents/worktrees/<name>` already says where it lives.
+ * same. No prefix: the pool path already says where it lives.
  * @module dsh-worktree-switch/host/naming
  */
 
