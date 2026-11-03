@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Rules",
+    "description": "Load markdown conventions from .dsh/rules into the agent's context only when it touches a matching file."
+  }
+}
