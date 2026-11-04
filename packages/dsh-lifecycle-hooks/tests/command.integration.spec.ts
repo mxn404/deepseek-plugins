@@ -434,10 +434,11 @@ describe('a command hook in a deployment without a shell', () => {
 describe('a command hook naming an action the event does not support', () => {
   it('warns, ignores the action, and lets the tool run', async () => {
     const root = await fixture.repo()
-    await writeHookScript(root, '.dsh/hooks/ask.mjs', nodeScript(`
-emit({ action: 'ask', reason: 'may I?' })
+    // `block` applies to a tool result, never to a call before it runs.
+    await writeHookScript(root, '.dsh/hooks/block.mjs', nodeScript(`
+emit({ action: 'block', reason: 'may I?' })
 `))
-    await writeHooks(root, [commandHook('asker', 'node .dsh/hooks/ask.mjs')])
+    await writeHooks(root, [commandHook('blocker', 'node .dsh/hooks/block.mjs')])
     const harness = await fixture.harness(root, {}, { bash: true })
     const adapter = harness.registerAdapter('mock', [
       bashToolCall('bash-1', 'touch ran.txt'),
@@ -451,6 +452,6 @@ emit({ action: 'ask', reason: 'may I?' })
     expect(requestText(adapter.requests[1]!)).not.toContain('may I?')
     expect(harness.pluginWarnings.some(warning => warning.includes('does not support; ignored'))).toBe(true)
     const records = hookRunRecords(agent.session)
-    expect(records[0]).toMatchObject({ hook_id: 'asker', handler: 'command', exit_code: 0, action: 'ask' })
+    expect(records[0]).toMatchObject({ hook_id: 'blocker', handler: 'command', exit_code: 0, action: 'block' })
   })
 })

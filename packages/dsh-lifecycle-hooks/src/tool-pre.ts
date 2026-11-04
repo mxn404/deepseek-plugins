@@ -1,10 +1,15 @@
 /**
- * The `tool.pre` dispatch plan: deny the call, add context, or halt the turn.
+ * The `tool.pre` dispatch plan: deny the call, ask the user to confirm it, add
+ * context, or halt the turn.
  *
  * The host seam is `tools/pre-execute`; a `deny` never runs the tool and the
- * model sees the reason as that call's error result. Context cannot ride on a
- * pre-execute decision, so it is injected with `agent.inject`: the loop parks
- * it in the next-step inbox and the model reads it on the following request.
+ * model sees the reason as that call's error result. An `ask` does not decide
+ * anything by itself: the host turns it into its own approval request and maps
+ * the outcome (`allowed-once` runs the tool, every refusal becomes a deny with
+ * the host's own reason), so this plugin must not call the approval service
+ * itself. Context cannot ride on a pre-execute decision, so it is injected
+ * with `agent.inject`: the loop parks it in the next-step inbox and the model
+ * reads it on the following request.
  *
  * A `halt` cancels the turn with the host's own `{kind:'hook'}` cause and also
  * denies this call, so nothing scheduled behind the hook runs. The turn is
@@ -22,6 +27,9 @@ import type { MergedDecision } from './outcome.ts'
 
 /** Reason used when a hook blocked the call without naming one. */
 const FALLBACK_DENY = 'denied by a lifecycle hook'
+
+/** Reason used when a hook asked for confirmation without naming one. */
+const FALLBACK_ASK = 'a lifecycle hook asked for confirmation'
 
 /** Reason used when a hook halted the turn without naming one. */
 const FALLBACK_HALT = 'halted by a lifecycle hook'
@@ -50,6 +58,13 @@ export function toolPrePlan(exec: ToolExecution, agent: Agent): DispatchPlan<Pre
       }
       if (decision.context.length > 0) agent.inject(contextMessage(decision.context))
       if (decision.action === 'deny') return { kind: 'deny', reason: decision.reason ?? FALLBACK_DENY }
+      if (decision.action === 'ask') {
+        return {
+          kind: 'ask',
+          reason: decision.reason ?? FALLBACK_ASK,
+          ...decision.displayReason === undefined ? {} : { displayReason: decision.displayReason },
+        }
+      }
       return undefined
     },
   }

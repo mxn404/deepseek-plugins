@@ -72,6 +72,21 @@ describe('the command stdout contract', () => {
       .toEqual({ action: 'halt', reason: 'stop' })
   })
 
+  it('reads an ask with localized display copy', () => {
+    expect(decodeOutcome(JSON.stringify({
+      action: 'ask',
+      reason: 'the command deletes files',
+      displayReason: { en: 'Allow this command?', zh: '允许执行这条命令吗？' },
+    }))).toEqual({
+      decision: {
+        action: 'ask',
+        reason: 'the command deletes files',
+        displayReason: { en: 'Allow this command?', zh: '允许执行这条命令吗？' },
+      },
+      error: undefined,
+    })
+  })
+
   it('tolerates a JSON object with no decision fields', () => {
     expect(decodeOutcome('{"meta":{"took":3}}')).toEqual({ decision: undefined, error: undefined })
   })
@@ -92,6 +107,10 @@ describe('the command stdout contract', () => {
     ['a non-string replace text', '{"replace":{"text":7}}', '"replace.text" must be a string'],
     ['a replace of the canonical value', '{"replace":{"value":42}}', 'cannot replace "value"'],
     ['a replace action without a replace object', '{"action":"replace"}', '"action":"replace" needs'],
+    ['a non-object display reason', '{"action":"ask","displayReason":"yes"}', '"displayReason" must be an object'],
+    ['a display reason with no English copy', '{"action":"ask","displayReason":{"zh":"是"}}', '"displayReason.en"'],
+    ['a non-string English display reason', '{"action":"ask","displayReason":{"en":7}}', '"displayReason.en"'],
+    ['a non-string localized display reason', '{"action":"ask","displayReason":{"en":"yes","zh":2}}', '"displayReason"'],
   ])('rejects %s', (_label, stdout, expected) => {
     const decoded = decodeOutcome(stdout)
     expect(decoded.decision).toBeUndefined()

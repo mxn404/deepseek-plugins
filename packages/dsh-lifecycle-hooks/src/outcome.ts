@@ -10,10 +10,10 @@
  *    soften it, and a `deny` or `block` outranks a `replace` with no relation
  *    to order. `deny` is the blocking outcome of an event that gates input,
  *    `block` of one that withholds output.
- * 3. `ask` — the vocabulary reserves a confirmation stop between blocking and
- *    continuing. No event lists it yet, so {@link allowedDecisions} removes it
- *    before the merge can see one; the rank is here so the order is written
- *    down in one place.
+ * 3. `ask` — a confirmation stop between blocking and continuing. Only
+ *    `tool.pre` lists it, and only its host seam can run an approval flow; an
+ *    event that does not support the action has already had it removed by
+ *    {@link allowedDecisions}. An `ask` never outranks a `deny` or a `block`.
  * 4. `continue` — every continue joins one reason list, in configuration
  *    order; only an event with no blocking action can reach it.
  * 5. `replace` — the last replacement in configuration order wins, so a hook
@@ -30,7 +30,7 @@
  */
 
 import type { HookRun } from './handler.ts'
-import type { HookAction, HookDecision, HookEvent } from './hook.ts'
+import type { ApprovalDisplayReason, HookAction, HookDecision, HookEvent } from './hook.ts'
 
 /** Reason used when a merge has to deny without one from a hook run. */
 const FALLBACK_DENY = 'denied by a lifecycle hook'
@@ -57,6 +57,11 @@ export interface MergedDecision {
    * none gave one. A `replace` has no reason of its own.
    */
   readonly reason?: string
+  /**
+   * Localized approval prompt copy, present exactly when the winning action is
+   * the `ask` that supplied it. Only `tool.pre` consumes it.
+   */
+  readonly displayReason?: ApprovalDisplayReason
   /** Context lines from every hook, in configuration order. */
   readonly context: readonly string[]
   /**
@@ -183,6 +188,7 @@ export function mergeDecisions(runs: readonly HookRun[]): MergedDecision | undef
     return {
       action,
       reason: reason.length === 0 ? FALLBACKS[action] : reason,
+      ...action === 'ask' && ask?.displayReason !== undefined ? { displayReason: ask.displayReason } : {},
       context,
     }
   }

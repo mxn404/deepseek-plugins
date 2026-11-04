@@ -7,7 +7,8 @@
  * and dispatches their hooks at dsh lifecycle extension points. This slice
  * dispatches `session.start` (context before the first request),
  * `step.start` (deny a submitted prompt, add context to the step, or halt),
- * `tool.pre` (deny the call, add context for the next request, or halt),
+ * `tool.pre` (deny the call, ask the host's approval flow to confirm it, add
+ * context for the next request, or halt),
  * `tool.post` (block, replace, or context after the tool ran), and `turn.stop`
  * (steer a stopping turn on for one more step), each through the same merge of
  * `builtin` and `command` outcomes.

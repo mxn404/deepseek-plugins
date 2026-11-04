@@ -2,13 +2,14 @@
 
 声明式生命周期钩子。把规则写成仓库里的 `.dsh/hooks.json`，随代码提交；插件按 session 的
 当前工作目录读它，在工具执行前按名称与参数匹配：命中的 `deny` 让这次工具调用**不执行**，
-拒绝理由作为工具结果回到模型。工具执行后同一个文件还能改写结果：`replace` 换掉模型读到的
+拒绝理由作为工具结果回到模型；命中的 `ask` 把这次调用交给宿主的审批流程，用户批准才执行，
+拒绝 / 取消 / 没有审批通道一律不执行。工具执行后同一个文件还能改写结果：`replace` 换掉模型读到的
 内容（脱敏 / 裁剪），`block` 把结果变成错误反馈，`context` 给模型补一句提醒。会话开始、
 每一步开始、以及 turn 自然停下时也能挂规则：注入上下文、按用户 prompt 拒绝一步、或用
 `continue` 让停下的 turn 再走一步。需要更复杂的判断时，每个事件点都能跑一条 `command`：
 脚本从 stdin 读 JSON、往 stdout 写一个 JSON outcome。
 
-本插件实现 spec [#7](https://github.com/mxn404/deepseek-plugins/issues/7) 的前六刀：
+本插件实现 spec [#7](https://github.com/mxn404/deepseek-plugins/issues/7) 的前七刀：
 [#8](https://github.com/mxn404/deepseek-plugins/issues/8) 的最小工具门禁（walking skeleton）、
 [#9](https://github.com/mxn404/deepseek-plugins/issues/9) 的分层发现 / 热重载、
 [#10](https://github.com/mxn404/deepseek-plugins/issues/10) 的 command handler 与 `tool.pre`
@@ -17,10 +18,11 @@
 （`block` / `replace` / `context`）、
 [#12](https://github.com/mxn404/deepseek-plugins/issues/12) 的 `session.start` / `step.start`
 与 `match.prompt`，以及
-[#13](https://github.com/mxn404/deepseek-plugins/issues/13) 的 `turn.stop` 继续与 loop guard。
-后续票在同一套 dispatcher、配置 schema、发现与 e2e harness 上补齐其余事件、`module`
-handler 与 `ask` outcome；目前打通 `session.start`、`step.start`、`tool.pre`、`tool.post`、
-`turn.stop` 五个事件点。
+[#13](https://github.com/mxn404/deepseek-plugins/issues/13) 的 `turn.stop` 继续与 loop guard，以及
+[#14](https://github.com/mxn404/deepseek-plugins/issues/14) 的 `tool.pre` `ask` 审批门禁。
+后续票在同一套 dispatcher、配置 schema、发现与 e2e harness 上补齐其余事件与 `module`
+handler；目前打通 `session.start`、`step.start`、`tool.pre`、`tool.post`、`turn.stop` 五个
+事件点，`ask` 只在 `tool.pre` 生效。
 
 ## 它做什么
 
@@ -37,6 +39,14 @@ handler 与 `ask` outcome；目前打通 `session.start`、`step.start`、`tool.
   `turn.stop` 没有任何选择维度，写了 `match` 的条目在加载时被跳过并 warn。
 - **拒绝**：命中的 `run` 返回 `deny` 时，宿主拿到 `{ kind: 'deny', reason }`，工具管线因此
   不进入工具实现，模型收到的工具结果就是 `Error: <reason>`。被拒绝的调用不会产生副作用。
+- **询问**：`tool.pre` 命中的 `ask` 不自己决定放行或拒绝，而是把 `{ kind: 'ask', reason }`
+  交回宿主的 `tools/pre-execute`；宿主用 `ctx.approval` 走自己的审批流程并映射结果：
+  `allowed-once` 才真正执行这次调用，`rejected` / `cancelled` / `unavailable` 都变成带宿主
+  理由的 deny（模型看到 `the user rejected tool …`、`… was cancelled` 或
+  `… requires approval, but no approval channel is available`）。插件**不**直接调用审批服务，
+  所以不会问两次，也不硬依赖它：部署里没有 `ctx.approval` 时宿主自己把 ask 降级成 deny。
+  `ask` 不会绕过 `ctx.tools.guard`（guard 在 pre-execute 之后仍会拒绝），与 `deny` 同时命中时
+  `deny` 优先，不弹审批。
 - **改写结果**：`tool.post` 的 hook 在工具**已经执行完**之后运行，所以它不能撤销副作用，只能
   决定模型读到什么。`replace` 用一段新文本替换模型可见的 `content`（成功与失败结果都支持），
   结果本身的 `value` 与错误状态不变；`block` 把结果变成 `isError: true`，内容换成合并后的
@@ -47,7 +57,7 @@ handler 与 `ask` outcome；目前打通 `session.start`、`step.start`、`tool.
   当前目录，stdin 是一份 JSON payload（`event` / `time` / `session_id` / `cwd` / `agent_id` /
   `turn` / `step` / `source` / `hook_id` / `tool`），env 至少带 `DSH_HOOK_EVENT`、
   `DSH_HOOK_SESSION_ID`、`DSH_HOOK_CWD`、`DSH_HOOK_TURN`、`DSH_HOOK_STEP`、`DSH_HOOK_ID`。
-  stdout 只认**一个** JSON outcome：`{ "action": …, "reason": …, "context": [ … ], "replace": { "text": … } }`；
+  stdout 只认**一个** JSON outcome：`{ "action": …, "reason": …, "displayReason": { "en": … }, "context": [ … ], "replace": { "text": … } }`；
   空输出等于「没有动作」，只写 `replace` 不写 `action` 也合法（等价于 `replace`）。非零退出、
   坏 JSON、`replace.value`、超时都按运行失败处理（默认放行，见 `onFailure`），超时由 shell
   执行器杀掉整个进程组。`async: true` 的条目脱手执行，只做副作用、不参与决策，插件销毁时会被
@@ -72,7 +82,7 @@ handler 与 `ask` outcome；目前打通 `session.start`、`step.start`、`tool.
   block 只丢工具自己 defer 的 context，hook 通过 `additionalContexts` 给的那份会留下）。
 - **合并**：同一事件点的多条 hook 按合并顺序、文件内数组顺序执行。优先级固定为
   `halt` > `deny` / `block` > `ask` > `continue` > `replace` > `context`：第一条 `deny` 或
-  `block` 的理由生效；多个 `continue` 的理由按顺序拼进**一条** steer 消息；
+  `block` 的理由生效，`deny` / `block` 永远压过 `ask`（ask 写在前面也一样，合并后不弹审批）；多个 `continue` 的理由按顺序拼进**一条** steer 消息；
   `replace` **最后一个生效**，后面的 hook 可以精修前面的替换；context 全部保留并按顺序拼接；
   只有 `halt` 会立即停止后续 handler 并以 `agent.cancel({ kind: 'hook', reason })` 中断这一轮
   （`tool.post` 的 halt 同时把该结果变成错误，模型不会读到 hook 愿意中断这一轮的那段输出）。
@@ -80,7 +90,9 @@ handler 与 `ask` outcome；目前打通 `session.start`、`step.start`、`tool.
   并忽略该动作，但保留它带的 context。
 - **审计**：每次 hook 运行往 session 写一条 `plugin:dsh-lifecycle-hooks/run`，含 `event`、
   `source`（配置文件绝对路径）、`hook_id`、`handler`、`action`、`duration_ms`、`exit_code`
-  （command 才有）、`error`。记录不进入模型可见面，fork / resume 会带着走。
+  （command 才有）、`error`。记录不进入模型可见面，fork / resume 会带着走。`action: "ask"`
+  表示这次运行**请求**了确认，不是用户已经批准：宿主在插件返回之后才跑审批，最终结果写进它
+  自己的 `approval/asked` + `approval/decided` durable 事件对（见下），插件不复制这对事件。
 - **热重载**：`fs.watch` + 50ms debounce 预热改动过的配置文件；每次解析前仍对每个候选文件做
   一次 mtime + ctime + size 快检。所以改 / 新建 / 删除任何一层配置后，**下一次事件**就用新
   配置，不用重启 session；watch 漏掉事件时 stat 兜底。
@@ -212,17 +224,22 @@ handler 与 `ask` outcome；目前打通 `session.start`、`step.start`、`tool.
 | `step.start` | `deny` / `halt` | `{ "action": "deny", "reason": "…" }` |
 | `step.start` | `context` | `{ "action": "context", "text": "…" }` |
 | `tool.pre` | `deny` | `{ "action": "deny", "reason": "…" }` |
+| `tool.pre` | `ask` | `{ "action": "ask", "reason": "…" }`（reason 可省） |
 | `tool.post` | `block` | `{ "action": "block", "reason": "…" }` |
 | `tool.post` | `replace` | `{ "action": "replace", "text": "…" }` |
 | `tool.post` | `inject` | `{ "action": "inject", "text": "…" }` |
 | `turn.stop` | `continue` | `{ "action": "continue", "reason": "…" }`（reason 可省） |
 
-`tool.pre` 的 builtin 自 walking skeleton 起就是 deny-only：command handler 在该事件上仍可报
-`context` / `halt`，但 builtin 的 `replace` / `block` / `context` 要等单独的取舍。
+`tool.pre` 的 builtin 接受 `deny` 与 `ask`；command handler 在该事件上还可报 `context` /
+`halt`，builtin 的 `replace` / `block` / `context` 仍未开放。`ask` 只在这个事件合法：其他
+事件写 builtin `ask` 会在加载时跳过该条并 warn；command 在运行时返回 `ask` 则 warn 一句
+「event 不支持」并忽略该动作（保留它带的 context）。
 
 `inject` 是 spec 的 builtin 词汇里「补一句 context」的动作，本插件把它折算成 `context` 的一条
 文本；`replace` 是 spec 没有单列 builtin 动作、本插件为 `tool.post` 补上的映射，等价于
-command 的 `{ "replace": { "text": "…" } }`。每个事件的 command 运行时 outcome 支持
+command 的 `{ "replace": { "text": "…" } }`。`ask` 还可以带 `displayReason`：一个以 `en`
+为必填 fallback、其他 locale 任选的对象，交给宿主做本地化审批提示（不落审计事件）；其他
+action 带它没有意义，会被解码后忽略。每个事件的 command 运行时 outcome 支持
 `action` / `reason` / `context` / `replace` 的任意合法组合；事件不支持的 action 只 warn 并忽略。
 
 写了别的合法值会 warn 一句 “not supported by this build” 并跳过该条（command 在运行时输出的
@@ -246,14 +263,21 @@ command 的 `{ "replace": { "text": "…" } }`。每个事件的 command 运行�
 }
 ```
 
-`action` 是这次运行**自己产出**的动作（`deny` / `block` / `replace` / `halt` / `continue`），不代表事件一定
-采纳了它（`async: true` 的运行、事件不支持的 action、以及被更高优先级 outcome 压过的
-`replace` 都不会生效）；`block` / `replace` 的运行即使没有压过别的 hook，也照样各写一条记录；
+`action` 是这次运行**自己产出**的动作（`deny` / `ask` / `block` / `replace` / `halt` /
+`continue`），不代表事件一定采纳了它（`async: true` 的运行、事件不支持的 action、以及被更高
+优先级 outcome 压过的 `replace` / `ask` 都不会生效）；`block` / `replace` 的运行即使没有压过别的 hook，也照样各写一条记录；
 只带 context 的运行没有 `action`。`exit_code` 只在 command 运行拿到退出码时出现（超时被杀、被
 信号杀死时没有）；`continued_count` 只在 `turn.stop` 的每条记录上出现（本次 stop 之前该 turn
 已授予的连续 continue 次数，含被 loop guard 忽略的那次）；`error` 只在运行失败时出现，失败
 默认不贡献决定，`onFailure: "block"` 时同一条记录会同时带 `error` 与合成的 `action`。本插件
 没有 UI，日志与这条记录是唯一的事后可观测面。
+
+`ask` 的最终结果不在插件记录里：宿主的审批服务在插件返回 `{ kind: 'ask' }` 之后才询问
+answerer，并把结果写成同一条 session 里的 durable 事件对——`approval/asked`（`toolName`、
+`callId`、`reason`）与 `approval/decided`（同一 `id`，`outcome` 为 `allowed-once` /
+`rejected` / `cancelled` / `unavailable`）。事后审计把两条记录对着读，就能还原「hook 请求了
+确认」与「用户最终怎么答」。部署里没有 `ctx.approval` 时这条链路整段降级为 deny，不会产生
+这对事件。
 
 ## 安装与验证
 
@@ -269,9 +293,9 @@ pnpm --dir /home/ubuntu/code/deepseek-harness dsh --profile dev --dump-config   
 
 这些是这一刀接受的边界，不是待修的缺陷：
 
-- **只覆盖五个事件**：`tool.result`、`session.end`、`notification` 与 `module` handler、`ask`
-  还没实现；配置文件里合法地写了它们也只会被跳过并 warn。`ask` 在 `outcome.ts` 的合并顺序里
-  占了位，但目前没有事件允许它，会在合并前被剥掉。
+- **只覆盖五个事件**：`tool.result`、`session.end`、`notification` 与 `module` handler 还没实现；
+  配置文件里合法地写了它们也只会被跳过并 warn。`ask` 只在 `tool.pre` 生效，其他事件返回它会被
+  剥掉。
 - **`tool.post` 不能阻止副作用**：hook 在工具执行后才运行，`block` / `replace` 只改变模型读到
   的结果；工具写下的文件、发出的请求都已经发生。要在执行前拦截，用 `tool.pre` 的 `deny`。
 - **`replace` 只能换模型可见内容**：宿主的 `value` 是执行期 schema 内 JSON、从不落盘，也无法

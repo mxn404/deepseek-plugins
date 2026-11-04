@@ -47,8 +47,8 @@ export type DispatchedHookEvent =
  *   has nothing to deny, halt, or ask about.
  * - `step.start` denies the proposed step, adds context to it, or halts the
  *   turn.
- * - `tool.pre` denies the call, adds context for the next request, or halts
- *   the turn.
+ * - `tool.pre` denies the call, asks the user to confirm it, adds context for
+ *   the next request, or halts the turn.
  * - `tool.post` blocks the result, replaces the model-visible content, adds
  *   context for the next request, or halts the turn.
  * - `turn.stop` continues the stopping turn for one more step; it has no
@@ -58,7 +58,7 @@ export type DispatchedHookEvent =
 export const EVENT_ACTIONS: Readonly<Record<DispatchedHookEvent, readonly HookAction[]>> = {
   'session.start': ['context'],
   'step.start': ['deny', 'context', 'halt'],
-  'tool.pre': ['deny', 'context', 'halt'],
+  'tool.pre': ['deny', 'ask', 'context', 'halt'],
   'tool.post': ['block', 'replace', 'context', 'halt'],
   'turn.stop': ['continue'],
 }
@@ -68,9 +68,10 @@ export type HookHandlerKind = 'builtin' | 'command' | 'module'
 
 /**
  * Actions the `.dsh/hooks.json` vocabulary names. This build executes `deny`,
- * `block`, `replace`, `context`, `halt`, and `continue`; `inject` is the
- * builtin spelling of one context line, and `ask` is the one the vocabulary
- * reserves without an event that applies it yet.
+ * `ask`, `block`, `replace`, `context`, `halt`, and `continue`; `inject` is the
+ * builtin spelling of one context line. `ask` is legal only at `tool.pre`,
+ * where the host has an approval flow to run; every other event warns about it
+ * and ignores it.
  */
 export type HookAction =
   | 'deny'
@@ -85,7 +86,7 @@ export type HookAction =
 /** Actions a `builtin` handler can decide without running anything. */
 export type BuiltinAction = Extract<
   HookAction,
-  'deny' | 'block' | 'replace' | 'inject' | 'context' | 'halt' | 'continue'
+  'deny' | 'ask' | 'block' | 'replace' | 'inject' | 'context' | 'halt' | 'continue'
 >
 
 /**
@@ -97,15 +98,16 @@ export type HookFailurePolicy = 'open' | 'block'
 /**
  * A one-line builtin decision, applied without running anything.
  *
- * The spec's builtin vocabulary is `{action, reason?, text?}`: a blocking
- * action carries a `reason`, `context` and `inject` carry the reminder `text`,
- * and `replace` carries the model-visible `text` that replaces the tool
- * result. The event's own load gate decides which of them an entry may name.
+ * The spec's builtin vocabulary is `{action, reason?, text?}`: a blocking or
+ * asking action carries a `reason`, `context` and `inject` carry the reminder
+ * `text`, and `replace` carries the model-visible `text` that replaces the tool
+ * result. The event's own load gate decides which of them an entry may name; an
+ * `ask` there is a request for the host's approval flow, never a decision.
  */
 export type BuiltinRun =
   | {
       readonly type: 'builtin'
-      readonly action: Extract<BuiltinAction, 'deny' | 'block' | 'halt'>
+      readonly action: Extract<BuiltinAction, 'deny' | 'ask' | 'block' | 'halt'>
       /** Model-facing reason; the loader defaults it, so never empty. */
       readonly reason: string
     }
@@ -145,6 +147,15 @@ export interface CommandRun {
 /** What a matching hook does, discriminated by its handler kind. */
 export type HookHandler = BuiltinRun | CommandRun
 
+/**
+ * Localized presentation of an approval question, as the host's `ask` decision
+ * accepts it: English is the required fallback, every other locale is optional.
+ */
+export interface ApprovalDisplayReason {
+  readonly en: string
+  readonly [locale: string]: string
+}
+
 /** One hook run's contribution to its event's decision. */
 export interface HookDecision {
   /**
@@ -154,6 +165,11 @@ export interface HookDecision {
   readonly action?: HookAction
   /** Model-facing reason for the action, when the action has one. */
   readonly reason?: string
+  /**
+   * Localized approval prompt copy for an `ask`; only `tool.pre` consumes it,
+   * and only the command handler can currently supply it.
+   */
+  readonly displayReason?: ApprovalDisplayReason
   /** Reminder lines for the model, concatenated across hooks in configuration order. */
   readonly context?: readonly string[]
   /**

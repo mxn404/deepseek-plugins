@@ -9,7 +9,8 @@
  * - the environment carries the same facts a script needs to locate itself
  *   (`DSH_HOOK_*`, see `payload.ts`);
  * - stdout carries at most one JSON outcome object, the spec's document:
- *   `{action?, reason?, context?, replace?}`;
+ *   `{action?, reason?, displayReason?, context?, replace?}` — `displayReason`
+ *   is the localized approval prompt copy an `ask` may carry;
  * - a clean exit (0) with empty stdout means "no action"; a non-zero exit, a
  *   malformed outcome, or a timeout is a failure, which the dispatcher turns
  *   into the entry's `onFailure` policy.
@@ -26,7 +27,7 @@
  */
 
 import type { ShellExecution, ShellExecutor, ShellRunResult } from '@deepseek-ai/dsh-shell'
-import type { HookAction, HookDecision } from './hook.ts'
+import type { ApprovalDisplayReason, HookAction, HookDecision } from './hook.ts'
 import { isRecord } from './match.ts'
 
 /** Actions the `.dsh/hooks.json` outcome vocabulary knows. */
@@ -120,6 +121,8 @@ export function decodeOutcome(stdout: string): CommandDecode {
   if (action === 'replace' && replace.replace === undefined) {
     return protocolError('"action":"replace" needs a "replace" object with the replacement text')
   }
+  const display = decodeDisplayReason(raw.displayReason)
+  if ('error' in display) return protocolError(display.error)
 
   const decision: HookDecision = {
     // A bare `{replace:{text}}` is the spec's replace outcome; the action is
@@ -128,6 +131,7 @@ export function decodeOutcome(stdout: string): CommandDecode {
       ? {}
       : { action: action ?? 'replace' },
     ...raw.reason === undefined ? {} : { reason: raw.reason as string },
+    ...display.displayReason === undefined ? {} : { displayReason: display.displayReason },
     ...context === undefined ? {} : { context },
     ...replace.replace === undefined ? {} : { replace: replace.replace },
   }
@@ -183,6 +187,33 @@ export async function runCommand(options: CommandOptions): Promise<CommandResult
 
   const decoded = decodeOutcome(result.stdout.text)
   return { decision: decoded.decision, exitCode, error: decoded.error }
+}
+
+/** Decoded `displayReason` field: the localized copy, its absence, or a protocol error. */
+type DisplayReasonDecode =
+  | { readonly displayReason: ApprovalDisplayReason | undefined }
+  | { readonly error: string }
+
+/**
+ * Decode the optional `displayReason` field, the localized approval prompt.
+ *
+ * The host requires English as the fallback locale, so `en` must be a
+ * non-empty string; every other locale is presentation-only and merely has to
+ * be a string. This field is only meaningful for `ask`, but the decode does
+ * not enforce that: the dispatcher already drops an ask an event cannot apply.
+ * @param raw - the outcome's `displayReason` value.
+ * @returns the localized copy, its absence, or the reason to fail the run.
+ */
+function decodeDisplayReason(raw: unknown): DisplayReasonDecode {
+  if (raw === undefined) return { displayReason: undefined }
+  if (!isRecord(raw)) return { error: '"displayReason" must be an object' }
+  if (typeof raw.en !== 'string' || raw.en.trim().length === 0) {
+    return { error: '"displayReason.en" must be a non-empty string' }
+  }
+  for (const [locale, text] of Object.entries(raw)) {
+    if (typeof text !== 'string') return { error: `"displayReason" values must be strings: ${locale}` }
+  }
+  return { displayReason: raw as unknown as ApprovalDisplayReason }
 }
 
 /** Decoded `replace` field: the replacement, no replacement written, or a protocol error. */

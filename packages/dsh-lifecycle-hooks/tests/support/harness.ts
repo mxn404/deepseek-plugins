@@ -17,6 +17,8 @@ import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import LocalJobRegistry from '@deepseek-ai/dsh-jobs-local'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import type { ApprovalOutcome, ApprovalRequest } from '@deepseek-ai/dsh-user-approval'
+import ApprovalService from '@deepseek-ai/dsh-user-approval'
 import * as BashEnvPlugin from '@deepseek-ai/dsh-shell-env'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import * as ToolBash from '@deepseek-ai/dsh-tool-bash'
@@ -42,6 +44,17 @@ export interface HooksHarness {
   readonly pluginWarnings: string[]
   /** Register one mock model route and return its adapter. */
   registerAdapter(route: string, script: ConstructorParameters<typeof MockAdapter>[0]): MockAdapter
+  /**
+   * Every approval the host asked the composed answerers, in order. Empty when
+   * the test mounted no approval service or no answerer was registered.
+   */
+  readonly approvalRequests: ApprovalRequest[]
+  /**
+   * Register a test answerer that grants (or refuses) every approval request.
+   * Without one, a mounted service answers `'unavailable'` (fail closed).
+   * @param outcome - the outcome every request settles to.
+   */
+  answerApprovals(outcome: ApprovalOutcome): void
   /** Create a production Agent on one registered route. */
   createAgent(route: string, cwd?: string): Promise<Agent>
 }
@@ -55,6 +68,12 @@ export interface HooksHarnessOptions {
    * Every harness stubs the env so a test never reads the developer's real home.
    */
   readonly dshHome?: string
+  /**
+   * Mount the real approval service (`ctx.approval`), so a `tool.pre` `ask`
+   * reaches the host's own approval flow. Omitted leaves the service unmounted:
+   * the deployment has no approval channel at all.
+   */
+  readonly approval?: boolean
 }
 
 /**
@@ -75,6 +94,7 @@ export async function createHooksHarness(
   const dshHome = options.dshHome ?? dshHomeOf(root)
   vi.stubEnv('DSH_HOME', dshHome)
   await mountAgentLoopTestDependencies(ctx, { workingDirectory: true })
+  if (options.approval === true) await ctx.plugin(ApprovalService, {})
   await ctx.plugin(ToolFs)
   if (options.bash === true) {
     await ctx.plugin(LocalJobRegistry)
@@ -95,11 +115,19 @@ export async function createHooksHarness(
     if (message.startsWith(`${DshLifecycleHooks.name}:`)) pluginWarnings.push(message)
   })
   let sessions = 0
+  const approvalRequests: ApprovalRequest[] = []
   return {
     ctx,
     dshHome,
     warnings,
     pluginWarnings,
+    approvalRequests,
+    answerApprovals(outcome) {
+      ctx.on('approval/request', (request) => {
+        approvalRequests.push(request)
+        return Promise.resolve(outcome)
+      })
+    },
     registerAdapter(route, script) {
       const adapter = new MockAdapter(script)
       ctx.llm.registerAdapter([route], adapter)
