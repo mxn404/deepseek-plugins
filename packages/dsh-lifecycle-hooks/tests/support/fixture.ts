@@ -7,9 +7,10 @@
  */
 
 import { rm } from 'node:fs/promises'
+import { vi } from 'vitest'
 import type * as DshLifecycleHooks from '../../src/index.ts'
 import { createHooksHarness, type HooksHarness, type HooksHarnessOptions } from './harness.ts'
-import { createRepo } from './project.ts'
+import { createRepo, createPlainDir } from './project.ts'
 
 /** Row-config overrides one test may pass; omitted fields take schema defaults. */
 export type HooksConfigOverrides = Partial<DshLifecycleHooks.Config>
@@ -18,6 +19,8 @@ export type HooksConfigOverrides = Partial<DshLifecycleHooks.Config>
 export interface HooksFixture {
   /** Create and track a temporary project root with a `.git` marker. */
   repo(): Promise<string>
+  /** Create and track a temporary directory with no `.git` marker of its own. */
+  plainDir(): Promise<string>
   /** Mount and track one hooks harness. */
   harness(root: string, config?: HooksConfigOverrides, options?: HooksHarnessOptions): Promise<HooksHarness>
   /** Dispose every tracked harness, then delete every tracked repository. */
@@ -37,12 +40,18 @@ export function createHooksFixture(): HooksFixture {
       roots.push(root)
       return root
     },
+    async plainDir() {
+      const root = await createPlainDir()
+      roots.push(root)
+      return root
+    },
     async harness(root, config = {}, options = {}) {
       const harness = await createHooksHarness(root, config, options)
       harnesses.push(harness)
       return harness
     },
     async cleanup() {
+      vi.unstubAllEnvs()
       for (const harness of harnesses.splice(0)) await harness.ctx.fiber.dispose()
       for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true })
     },

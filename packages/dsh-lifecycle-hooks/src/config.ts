@@ -24,6 +24,28 @@ export interface Config {
    * kinds a later ticket adds can actually reach it.
    */
   defaultTimeoutMs: number
+  /**
+   * Whether `.dsh/hooks.local.json` layers are discovered. They hold personal
+   * overrides that stay out of git; turn this off to run only the committed
+   * configuration.
+   */
+  localHooks: boolean
+  /**
+   * Whether `.dsh/hooks.json` layers are discovered. Turning this off leaves
+   * the user-level file and the `hooks.local.json` layers in play.
+   */
+  projectHooks: boolean
+  /**
+   * Whether `${DSH_HOME:-~/.dsh}/hooks.json` is discovered. Turning this off
+   * makes a Session see only the layers under its own project.
+   */
+  userHooks: boolean
+  /**
+   * Whether `fs.watch` keeps discovery warm. With it off, an edited file is
+   * still picked up by the stat check before every resolve; the watcher only
+   * makes the change visible sooner.
+   */
+  watch: boolean
 }
 
 /** Schemastery schema for {@link Config}. */
@@ -36,4 +58,16 @@ export const Config: Schema<Config> = Schema.object({
     .min(1)
     .default(30000)
     .description('Timeout for a hook entry that declares no timeoutMs.'),
+  localHooks: Schema.boolean()
+    .default(true)
+    .description('Discover .dsh/hooks.local.json layers.'),
+  projectHooks: Schema.boolean()
+    .default(true)
+    .description('Discover .dsh/hooks.json layers.'),
+  userHooks: Schema.boolean()
+    .default(true)
+    .description('Discover the user-level ${DSH_HOME:-~/.dsh}/hooks.json layer.'),
+  watch: Schema.boolean()
+    .default(true)
+    .description('Watch hooks files so edits apply on the next event without a stat delay.'),
 })

@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Lifecycle Hooks",
-    "description": "Declarative hooks from a repository's .dsh/hooks.json: a builtin deny rule gates matching tool calls before they run."
+    "description": "Declarative hooks discovered from the user, project and local .dsh/hooks.json layers: a builtin deny rule gates matching tool calls before they run, with hot reload."
   }
 }

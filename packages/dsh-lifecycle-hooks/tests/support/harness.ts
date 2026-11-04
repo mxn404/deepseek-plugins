@@ -25,10 +25,13 @@ import * as ToolJobs from '@deepseek-ai/dsh-tool-jobs'
 import { vi } from 'vitest'
 import * as DshLifecycleHooks from '../../src/index.ts'
 import { MockAdapter } from './mock-adapter.ts'
+import { dshHomeOf } from './project.ts'
 
 /** One mounted host context and the adapters/agents created in it. */
 export interface HooksHarness {
   readonly ctx: Context
+  /** `$DSH_HOME` the plugin resolves user-level hooks against. */
+  readonly dshHome: string
   /** Warnings the plugin emitted, in order. */
   readonly warnings: string[]
   /** Register one mock model route and return its adapter. */
@@ -41,6 +44,11 @@ export interface HooksHarness {
 export interface HooksHarnessOptions {
   /** Mount the real bash tool stack (jobs, subprocess, shell env, executor, tool). */
   readonly bash?: boolean
+  /**
+   * Directory to use as the user's `$DSH_HOME`; defaults to `<root>/.dsh-home`.
+   * Every harness stubs the env so a test never reads the developer's real home.
+   */
+  readonly dshHome?: string
 }
 
 /**
@@ -56,6 +64,10 @@ export async function createHooksHarness(
   options: HooksHarnessOptions = {},
 ): Promise<HooksHarness> {
   const ctx = new CordisContext()
+  // Discovery reads `DSH_HOME` on every resolve, so a stub here keeps the
+  // developer's real `~/.dsh/hooks.json` out of every test.
+  const dshHome = options.dshHome ?? dshHomeOf(root)
+  vi.stubEnv('DSH_HOME', dshHome)
   await mountAgentLoopTestDependencies(ctx, { workingDirectory: true })
   await ctx.plugin(ToolFs)
   if (options.bash === true) {
@@ -76,6 +88,7 @@ export async function createHooksHarness(
   let sessions = 0
   return {
     ctx,
+    dshHome,
     warnings,
     registerAdapter(route, script) {
       const adapter = new MockAdapter(script)
