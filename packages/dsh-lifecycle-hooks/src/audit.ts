@@ -9,6 +9,13 @@
  * what a hook decided, so a run is written even when the hook observed rather
  * than acted, and even when it failed.
  *
+ * A run record describes what the hook produced, not what the host did with
+ * it. `action: "ask"` at `tool.pre` therefore means "the hook asked for a
+ * confirmation", not "the user allowed it": the host runs its approval flow
+ * after the pre-execute listener returns, and writes the final outcome as its
+ * own durable `approval/asked` + `approval/decided` Session pair. The plugin
+ * deliberately does not duplicate that pair in its record.
+ *
  * @module dsh-lifecycle-hooks/audit
  */
 

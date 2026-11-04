@@ -147,6 +147,27 @@ describe('the hooks file schema', () => {
     expect(parsed.warnings[0]).toContain(expected)
   })
 
+  it('accepts the tool.pre builtin ask and defaults its reason', () => {
+    const parsed = hooksOf(JSON.stringify({
+      version: 1,
+      hooks: [
+        { id: 'confirm', on: 'tool.pre', run: { type: 'builtin', action: 'ask', reason: 'this write is dangerous' } },
+        { id: 'quiet', on: 'tool.pre', run: { type: 'builtin', action: 'ask' } },
+        { id: 'elsewhere', on: 'step.start', run: { type: 'builtin', action: 'ask', reason: 'not here' } },
+      ],
+    }))
+    expect(parsed.hooks.map(hook => hook.run)).toEqual([
+      { type: 'builtin', action: 'ask', reason: 'this write is dangerous' },
+      { type: 'builtin', action: 'ask', reason: 'a lifecycle hook asked for confirmation' },
+    ])
+    expect(parsed.hooks.map(hook => hook.on)).toEqual(['tool.pre', 'tool.pre'])
+    // `ask` is legal only where a confirmation stop exists: every other event
+    // drops the entry at load time instead of letting it look configured.
+    expect(parsed.warnings).toHaveLength(1)
+    expect(parsed.warnings[0]).toContain('ask')
+    expect(parsed.warnings[0]).toContain('step.start')
+  })
+
   it('accepts a command handler on tool.post', () => {
     const parsed = hooksOf(JSON.stringify({
       version: 1,
@@ -294,9 +315,9 @@ describe('the hooks file schema', () => {
       'unknown handler type',
     ],
     [
-      'an action a later ticket owns',
-      { id: 'a', on: 'tool.pre', run: { type: 'builtin', action: 'ask' } },
-      'not supported by this build on tool.pre',
+      'an ask outside tool.pre',
+      { id: 'a', on: 'step.start', run: { type: 'builtin', action: 'ask' } },
+      'not supported by this build on step.start',
     ],
     [
       'a builtin continue on tool.pre',
@@ -559,6 +580,48 @@ describe('merging one event’s decisions', () => {
       reason: 'first reason\nthird reason',
       context: ['second context'],
     })
+  })
+
+  it('asks when no blocking action outranks the ask', () => {
+    expect(mergeDecisions([run('confirm', { action: 'ask', reason: 'write to .env?', context: ['one'] })]))
+      .toEqual({ action: 'ask', reason: 'write to .env?', context: ['one'] })
+  })
+
+  it('fills a missing ask reason', () => {
+    expect(mergeDecisions([run('quiet', { action: 'ask' })]))
+      .toEqual({ action: 'ask', reason: 'a lifecycle hook asked for confirmation', context: [] })
+  })
+
+  it('carries the winning ask’s display copy', () => {
+    expect(mergeDecisions([run('confirm', {
+      action: 'ask',
+      reason: 'write to .env?',
+      displayReason: { en: 'Allow writing to .env?', zh: '允许写入 .env 吗？' },
+    })])).toEqual({
+      action: 'ask',
+      reason: 'write to .env?',
+      displayReason: { en: 'Allow writing to .env?', zh: '允许写入 .env 吗？' },
+      context: [],
+    })
+  })
+
+  it.each([
+    ['an ask before a deny', ['ask', 'deny']],
+    ['a deny before an ask', ['deny', 'ask']],
+  ])('lets a deny outrank %s', (_label, order) => {
+    const decisions: Record<string, HookDecision> = {
+      ask: { action: 'ask', reason: 'may I?' },
+      deny: { action: 'deny', reason: 'not allowed' },
+    }
+    expect(mergeDecisions(order.map((action, index) => run(String(index), decisions[action]))))
+      .toEqual({ action: 'deny', reason: 'not allowed', context: [] })
+  })
+
+  it('lets an ask outrank a continue', () => {
+    expect(mergeDecisions([
+      run('keep', { action: 'continue', reason: 'go on' }),
+      run('confirm', { action: 'ask', reason: 'may I?' }),
+    ])).toEqual({ action: 'ask', reason: 'may I?', context: [] })
   })
 
   it('lets a blocking action outrank a continue', () => {

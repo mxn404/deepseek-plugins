@@ -67,14 +67,14 @@ const MATCH_DIMENSIONS: Readonly<Record<DispatchedHookEvent, 'none' | 'tool' | '
  * action carries a reason, `context` and `inject` one reminder line, and
  * `replace` the model-visible text of a tool result. `EVENT_ACTIONS` is the
  * command-handler authority (filtered at dispatch time); this table is the
- * load-time gate, and it is narrower: `tool.pre` has been deny-only since the
- * walking skeleton, so widening its builtin vocabulary stays a separate
- * decision.
+ * load-time gate, and it is narrower: `tool.pre` accepts only the blocking
+ * builtins a call can be stopped by before it runs, `deny` and `ask`, while
+ * context and halt there remain command-handler (or later) territory.
  */
 const BUILTIN_ACTIONS: Readonly<Record<DispatchedHookEvent, readonly HookAction[]>> = {
   'session.start': ['context'],
   'step.start': ['deny', 'context', 'halt'],
-  'tool.pre': ['deny'],
+  'tool.pre': ['deny', 'ask'],
   'tool.post': ['block', 'replace', 'inject'],
   'turn.stop': ['continue'],
 }
@@ -305,6 +305,7 @@ function parseBuiltinRun(raw: Record<string, unknown>, event: DispatchedHookEven
       return { run: { type: 'builtin', action, text: raw.text } }
     }
     case 'deny':
+    case 'ask':
     case 'block':
     case 'halt': {
       const reason = typeof raw.reason === 'string' && raw.reason.trim().length > 0
@@ -312,9 +313,11 @@ function parseBuiltinRun(raw: Record<string, unknown>, event: DispatchedHookEven
         : undefined
       const fallback = action === 'deny'
         ? 'denied by a lifecycle hook'
-        : action === 'block'
-          ? 'blocked by a lifecycle hook'
-          : 'halted by a lifecycle hook'
+        : action === 'ask'
+          ? 'a lifecycle hook asked for confirmation'
+          : action === 'block'
+            ? 'blocked by a lifecycle hook'
+            : 'halted by a lifecycle hook'
       return { run: { type: 'builtin', action, reason: reason ?? fallback } }
     }
     case 'continue': {

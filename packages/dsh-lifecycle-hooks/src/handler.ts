@@ -72,6 +72,7 @@ export interface HookRun {
 function builtinDecision(run: BuiltinRun): HookDecision {
   switch (run.action) {
     case 'deny':
+    case 'ask':
     case 'block':
     case 'halt':
       return { action: run.action, reason: run.reason }
