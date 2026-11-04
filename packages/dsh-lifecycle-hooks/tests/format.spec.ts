@@ -638,6 +638,23 @@ describe('merging one event’s decisions', () => {
     ])).toEqual({ action: 'deny', reason: 'no', context: ['first', 'second', 'third', 'fourth'] })
   })
 
+  it('keeps the last meta in configuration order', () => {
+    expect(mergeDecisions([
+      run('one', { action: 'deny', reason: 'no', meta: { rule: 'no-rm' } }),
+      run('two', { context: ['a note'], meta: { rule: 'no-rm', severity: 2 } }),
+    ])).toEqual({
+      action: 'deny',
+      reason: 'no',
+      context: ['a note'],
+      meta: { rule: 'no-rm', severity: 2 },
+    })
+  })
+
+  it('returns a meta-only outcome when nothing else decided', () => {
+    expect(mergeDecisions([run('meta', { meta: { took: 3 } })]))
+      .toEqual({ context: [], meta: { took: 3 } })
+  })
+
   it('returns context alone when no hook blocked the event', () => {
     expect(mergeDecisions([run('note', { context: ['just so you know'] })]))
       .toEqual({ context: ['just so you know'] })

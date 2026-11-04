@@ -113,6 +113,41 @@ if (broken.length > 0) {
     expect(records[0]!.error).toBeUndefined()
     expect(harness.pluginWarnings).toEqual([])
   })
+
+  it('carries the meta document into the audit record, not the model surface', async () => {
+    const root = await fixture.repo()
+    await writeHookScript(root, '.dsh/hooks/meta.mjs', nodeScript(`
+emit({
+  action: 'deny',
+  reason: 'blocked with metadata',
+  meta: { rule: 'no-read', severity: 2 },
+})
+`))
+    await writeHooks(root, [
+      commandHook('meta', 'node .dsh/hooks/meta.mjs', { match: { tool: 'read' } }),
+    ])
+    const harness = await fixture.harness(root, {}, { bash: true })
+    const adapter = harness.registerAdapter('mock', [
+      toolCallResponse('read-1', 'read', { file_path: 'note.txt' }),
+      textResponse('done'),
+    ])
+    const agent = await harness.createAgent('mock')
+
+    await runTurn(agent)
+
+    expect(requestText(adapter.requests[1]!)).toContain('blocked with metadata')
+    // Meta is audit-only: it never becomes part of the model-visible reason.
+    expect(requestText(adapter.requests[1]!)).not.toContain('no-read')
+    const [record] = hookRunRecords(agent.session)
+    expect(record).toMatchObject({
+      event: 'tool.pre',
+      hook_id: 'meta',
+      handler: 'command',
+      action: 'deny',
+      meta: { rule: 'no-read', severity: 2 },
+    })
+    expect(record!.error).toBeUndefined()
+  })
 })
 
 describe('a failing command hook', () => {

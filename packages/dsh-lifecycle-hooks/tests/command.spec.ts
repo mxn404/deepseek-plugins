@@ -87,8 +87,30 @@ describe('the command stdout contract', () => {
     })
   })
 
-  it('tolerates a JSON object with no decision fields', () => {
-    expect(decodeOutcome('{"meta":{"took":3}}')).toEqual({ decision: undefined, error: undefined })
+  it('reads an outcome that carries a meta document', () => {
+    expect(decodeOutcome(JSON.stringify({
+      action: 'deny',
+      reason: 'rm -rf is blocked',
+      meta: { rule: 'no-rm', severity: 2, tags: ['safety', null] },
+    }))).toEqual({
+      decision: {
+        action: 'deny',
+        reason: 'rm -rf is blocked',
+        meta: { rule: 'no-rm', severity: 2, tags: ['safety', null] },
+      },
+      error: undefined,
+    })
+  })
+
+  it('reads a meta-only outcome instead of dropping it', () => {
+    expect(decodeOutcome('{"meta":{"took":3}}')).toEqual({
+      decision: { meta: { took: 3 } },
+      error: undefined,
+    })
+  })
+
+  it('tolerates a JSON object with no outcome fields', () => {
+    expect(decodeOutcome('{}')).toEqual({ decision: undefined, error: undefined })
   })
 
   it.each([
@@ -102,6 +124,8 @@ describe('the command stdout contract', () => {
     ['a non-string reason', '{"reason":7}', '"reason" must be a string'],
     ['a non-array context', '{"action":"deny","context":"one"}', '"context" must be an array'],
     ['a non-string context entry', '{"action":"deny","context":["one",2]}', '"context" entries must be strings'],
+    ['a non-object meta', '{"meta":["took",3]}', '"meta" must be a JSON object'],
+    ['a non-record meta', '{"meta":"took"}', '"meta" must be a JSON object'],
     ['a non-object replace', '{"replace":"REDACTED"}', '"replace" must be an object'],
     ['a replace without text', '{"replace":{}}', '"replace.text" must be a string'],
     ['a non-string replace text', '{"replace":{"text":7}}', '"replace.text" must be a string'],

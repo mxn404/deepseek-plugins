@@ -57,6 +57,11 @@ export interface HookRunRecord {
   readonly exit_code?: number
   /** Failure detail, absent on a successful run. */
   readonly error?: string
+  /**
+   * Free-form document the handler attached to its outcome, present only when
+   * it reported one. Audit-only: no event plan acts on it.
+   */
+  readonly meta?: Record<string, unknown>
 }
 
 declare module '@deepseek-ai/dsh-session/types' {
@@ -76,6 +81,7 @@ export function recordHookRun(session: Session, run: HookRun, continuedCount?: n
   // `action` entirely, because an explicit `undefined` is not lossless JSON
   // and the Session would reject the whole record.
   const action = run.decision?.action
+  const meta = run.decision?.meta
   const record: HookRunRecord = {
     event: run.event,
     source: run.source,
@@ -86,6 +92,7 @@ export function recordHookRun(session: Session, run: HookRun, continuedCount?: n
     duration_ms: run.durationMs,
     ...run.exitCode === undefined ? {} : { exit_code: run.exitCode },
     ...run.error === undefined ? {} : { error: run.error },
+    ...meta === undefined ? {} : { meta },
   }
   appendPluginRecord(session, 'plugin:dsh-lifecycle-hooks/run', record)
 }

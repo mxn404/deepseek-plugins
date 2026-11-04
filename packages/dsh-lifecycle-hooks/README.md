@@ -277,8 +277,10 @@ builtin 动作。
 - **env** 至少带 `DSH_HOOK_EVENT`、`DSH_HOOK_SESSION_ID`、`DSH_HOOK_CWD`、
   `DSH_HOOK_TURN`、`DSH_HOOK_STEP`、`DSH_HOOK_ID`，与 stdin 的对应字段一致。
 - **stdout** 只认**一个** JSON outcome：
-  `{ "action": …, "reason": …, "displayReason": { "en": … }, "context": [ … ], "replace": { "text": … } }`。
+  `{ "action": …, "reason": …, "displayReason": { "en": … }, "context": [ … ], "replace": { "text": … }, "meta": { … } }`。
   空输出等于「没有动作」；只写 `{ "replace": { "text": … } }` 也合法（等价于 `replace`）。
+  `meta` 是自由格式的 JSON 对象（数组不算），只随审计记录落盘，不改变事件行为；写了非 JSON
+  对象是协议错误，按运行失败处理。
 - **失败**：非零退出、stdout 不是 JSON、`replace.value`（协议错误）、超时都按运行失败处理，
   默认放行（见 `onFailure`）。超时由宿主 shell 执行器杀掉**整个进程组**。
 - **异步**：`async: true` 的条目脱手执行，只做副作用、不参与决策，插件销毁时会被中止。
@@ -364,6 +366,7 @@ export default async (ctx) => {
 4. `continue` —— 只在 `turn.stop` 生效；所有 continue 的理由按顺序拼成**一条** steer 消息。
 5. `replace` —— 最后一个生效，后面的 hook 可以精修前面的替换。
 6. `context` —— 全部保留，按配置顺序拼接；即使 `block` / `deny` 胜出，context 也保留。
+7. `meta` —— 不参与优先级；各 run 的审计文档按配置顺序最后一个生效，只写进合并结果与审计记录。
 
 事件不支持的 action 会 warn 一句并忽略，但保留它带的 context。同一事件点的全部 context
 拼成**一条** user 消息，包成 `<system-reminder>`，message source 标
@@ -406,12 +409,15 @@ deny 本次调用，`tool.post` 的 halt 同时把该结果变成错误，模型
   "handler": "command",
   "action": "deny",
   "duration_ms": 42,
-  "exit_code": 0
+  "exit_code": 0,
+  "meta": { "rule": "no-rm", "severity": 2 }
 }
 ```
 
 - `action` 是这次运行**自己产出**的动作（`deny` / `ask` / `block` / `replace` / `halt` /
   `continue`），不代表事件一定采纳了它；只带 context 的运行没有 `action`。
+- `meta` 只在 handler 的 outcome 里给了这个字段时出现；它是审计数据，宿主与插件都不据此
+  改变行为。
 - `exit_code` 只在 command 运行拿到退出码时出现（超时被杀、被信号杀死时没有）。
 - `continued_count` 只在 `turn.stop` 的每条记录上出现（本次 stop 之前该 turn 已授予的
   连续 continue 次数）。

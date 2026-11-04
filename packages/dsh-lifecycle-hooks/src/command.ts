@@ -140,6 +140,8 @@ export function decodeDecision(raw: unknown, subject = 'stdout'): CommandDecode 
   }
   const display = decodeDisplayReason(raw.displayReason)
   if ('error' in display) return protocolError(display.error)
+  const meta = decodeMeta(raw.meta)
+  if ('error' in meta) return protocolError(meta.error)
 
   const decision: HookDecision = {
     // A bare `{replace:{text}}` is the spec's replace outcome; the action is
@@ -151,8 +153,11 @@ export function decodeDecision(raw: unknown, subject = 'stdout'): CommandDecode 
     ...display.displayReason === undefined ? {} : { displayReason: display.displayReason },
     ...context === undefined ? {} : { context },
     ...replace.replace === undefined ? {} : { replace: replace.replace },
+    ...meta.meta === undefined ? {} : { meta: meta.meta },
   }
-  const decided = decision.action !== undefined || decision.context !== undefined
+  const decided = decision.action !== undefined
+    || decision.context !== undefined
+    || decision.meta !== undefined
   return { decision: decided ? decision : undefined, error: undefined }
 }
 
@@ -231,6 +236,79 @@ function decodeDisplayReason(raw: unknown): DisplayReasonDecode {
     if (typeof text !== 'string') return { error: `"displayReason" values must be strings: ${locale}` }
   }
   return { displayReason: raw as unknown as ApprovalDisplayReason }
+}
+
+/** Decoded `meta` field: the audit document, its absence, or a protocol error. */
+type MetaDecode =
+  | { readonly meta: Record<string, unknown> | undefined }
+  | { readonly error: string }
+
+/**
+ * Decode the optional `meta` field, the handler's free-form audit document.
+ *
+ * It is part of the outcome protocol but not of any decision: the merge and the
+ * audit record carry it, and no event plan reads it. Only a JSON object is
+ * accepted (a JSON array is not), and every nested value has to be
+ * JSON-serializable — the audit writer snapshots the record losslessly, so an
+ * unserializable value would otherwise turn into a failed write instead of a
+ * clear protocol error.
+ * @param raw - the outcome's `meta` value.
+ * @returns the audit document, its absence, or the reason to fail the run.
+ */
+function decodeMeta(raw: unknown): MetaDecode {
+  if (raw === undefined) return { meta: undefined }
+  if (!isJsonObject(raw)) return { error: '"meta" must be a JSON object' }
+  return { meta: raw }
+}
+
+/**
+ * Whether a value is a losslessly JSON-serializable object.
+ * @param value - the value to inspect.
+ * @param seen - objects on the current path, so a cycle is rejected, not traversed forever.
+ * @returns true for a plain object whose every nested value is JSON data.
+ */
+function isJsonObject(value: unknown, seen: WeakSet<object> = new WeakSet()): value is Record<string, unknown> {
+  if (!isRecord(value)) return false
+  const prototype = Object.getPrototypeOf(value)
+  if (prototype !== Object.prototype && prototype !== null) return false
+  if (seen.has(value)) return false
+  seen.add(value)
+  try {
+    return Object.values(value).every(entry => isJsonValue(entry, seen))
+  } finally {
+    seen.delete(value)
+  }
+}
+
+/**
+ * Whether a value can survive `JSON.stringify` without losing data.
+ * @param value - the value to inspect.
+ * @param seen - objects on the current path, so a cycle is rejected, not traversed forever.
+ * @returns true for strings, finite numbers, booleans, null, arrays, and plain objects.
+ */
+function isJsonValue(value: unknown, seen: WeakSet<object>): boolean {
+  if (value === null) return true
+  switch (typeof value) {
+    case 'string':
+    case 'boolean':
+      return true
+    case 'number':
+      return Number.isFinite(value)
+    case 'object':
+      break
+    default:
+      return false
+  }
+  if (Array.isArray(value)) {
+    if (seen.has(value)) return false
+    seen.add(value)
+    try {
+      return value.every(entry => isJsonValue(entry, seen))
+    } finally {
+      seen.delete(value)
+    }
+  }
+  return isJsonObject(value, seen)
 }
 
 /** Decoded `replace` field: the replacement, no replacement written, or a protocol error. */

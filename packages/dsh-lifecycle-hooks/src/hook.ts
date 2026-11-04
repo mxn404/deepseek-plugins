@@ -230,6 +230,12 @@ export interface HookDecision {
    * `tool.post` consumes it, and never for the canonical `value`.
    */
   readonly replace?: { readonly text: string }
+  /**
+   * Free-form audit metadata the handler attached to its outcome. It is
+   * carried through the merge and written to the audit record; no event plan
+   * acts on it.
+   */
+  readonly meta?: Record<string, unknown>
 }
 
 /** One validated hook entry. */

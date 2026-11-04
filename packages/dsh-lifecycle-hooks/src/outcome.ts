@@ -69,6 +69,12 @@ export interface MergedDecision {
    * is `replace`: only the model-visible content is ever replaced.
    */
   readonly replace?: { readonly text: string }
+  /**
+   * Free-form audit metadata every run passed through, last one wins. The merge
+   * ranks no action for it: it is carried so the merged outcome has the same
+   * document shape as a single run's.
+   */
+  readonly meta?: Record<string, unknown>
 }
 
 /** Reason a blocking action falls back to when no hook gave one. */
@@ -103,6 +109,7 @@ export function allowedDecisions(
     warn(`hook "${run.hook.id}" reported action "${action}", which ${run.event} does not support; ignored`)
     const kept: HookDecision = {
       ...decision.context === undefined ? {} : { context: decision.context },
+      ...decision.meta === undefined ? {} : { meta: decision.meta },
     }
     return { ...run, decision: kept }
   })
@@ -148,6 +155,7 @@ export function mergeDecisions(runs: readonly HookRun[]): MergedDecision | undef
   let block: HookDecision | undefined
   let ask: HookDecision | undefined
   let replace: { readonly text: string } | undefined
+  let meta: Record<string, unknown> | undefined
   let continued = false
   const continueReasons: string[] = []
   const context: string[] = []
@@ -157,6 +165,9 @@ export function mergeDecisions(runs: readonly HookRun[]): MergedDecision | undef
     // a decision on purpose and must merge like any other.
     const decision = run.decision
     if (decision === undefined) continue
+    // Meta is last-wins, like replace: a later hook's document is the one the
+    // merged outcome names, while every run keeps its own audit record.
+    if (decision.meta !== undefined) meta = decision.meta
     if (decision.action === 'halt') halt ??= decision
     else if (decision.action === 'deny') deny ??= decision
     else if (decision.action === 'block') block ??= decision
@@ -175,6 +186,7 @@ export function mergeDecisions(runs: readonly HookRun[]): MergedDecision | undef
     }
     if (decision.context !== undefined) context.push(...decision.context)
   }
+  const metaField = meta === undefined ? {} : { meta }
   const blocking = halt ?? deny ?? block ?? ask
   if (blocking !== undefined) {
     const action = halt !== undefined
@@ -190,6 +202,7 @@ export function mergeDecisions(runs: readonly HookRun[]): MergedDecision | undef
       reason: reason.length === 0 ? FALLBACKS[action] : reason,
       ...action === 'ask' && ask?.displayReason !== undefined ? { displayReason: ask.displayReason } : {},
       context,
+      ...metaField,
     }
   }
   if (continued) {
@@ -198,8 +211,9 @@ export function mergeDecisions(runs: readonly HookRun[]): MergedDecision | undef
       action: 'continue',
       ...reason.length === 0 ? {} : { reason },
       context,
+      ...metaField,
     }
   }
-  if (replace !== undefined) return { action: 'replace', replace, context }
-  return context.length === 0 ? undefined : { context }
+  if (replace !== undefined) return { action: 'replace', replace, context, ...metaField }
+  return context.length === 0 && meta === undefined ? undefined : { context, ...metaField }
 }
