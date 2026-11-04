@@ -23,7 +23,7 @@ import { resolveSlotLabel } from '@deepseek-ai/dsh-client-ui-slots'
 import { en } from '../src/client/locales.ts'
 import { INTENT_STORAGE_KEY } from '../src/client/intent.ts'
 import {
-  copyRef, fail, ok, prepareValue, REPOSITORY, SESSION, setup, supportedStatus,
+  copyRef, fail, ok, prepareValue, releaseValue, REPOSITORY, SESSION, setup, supportedStatus,
   unsupportedStatus,
 } from './client-harness.ts'
 import type { ClientHarness, ClientSlotView } from './client-harness.ts'
@@ -226,18 +226,20 @@ describe('the failed face', () => {
     expect(harness.blocks.reasonFor()).toBeUndefined()
   })
 
-  it('turning the switch off while failed leaves the failed face and releases the composer', async () => {
+  it('turning the switch off after a failure undoes whatever the host may have left', async () => {
     const harness = await setup()
     scriptStatus(harness, supportedStatus())
     harness.connection.setAnswer('prepare', () => fail('the copy could not be created'))
+    harness.connection.setAnswer('release', () => ok(releaseValue({ removed: null })))
 
     const view = renderChip(harness)
     await waitFor(() => { expect(view.view.getByText('Worktree failed')).toBeTruthy() })
 
     fireEvent.click(switchOf(view))
-    await waitFor(() => { expect(chipOf(view).getAttribute('data-phase')).toBe('off') })
-    expect(view.view.getByText('Worktree off')).toBeTruthy()
+    await waitFor(() => { expect(view.view.getByText('Worktree off')).toBeTruthy() })
+    expect(chipOf(view).getAttribute('data-phase')).toBe('off')
     expect(switchOf(view).getAttribute('aria-checked')).toBe('false')
+    expect(harness.connection.callsFor('release')).toHaveLength(1)
     expect(harness.blocks.reasonFor()).toBeUndefined()
     expect(storedIntent()).toEqual({ [REPOSITORY]: false })
   })
@@ -272,25 +274,35 @@ describe('the disabled face', () => {
   })
 })
 
-describe('turning isolation off for later sessions', () => {
-  it('keeps this session in its copy, remembers the choice, and a fresh page never prepares', async () => {
+describe('turning isolation off before the first prompt', () => {
+  it('moves the session back to the project and drops the copy the switch made', async () => {
     const harness = await setup()
-    scriptStatus(harness, supportedStatus())
-    harness.connection.setAnswer('prepare', () => ok(prepareValue()))
+    let cwd = REPOSITORY
+    harness.connection.setAnswer('status', () => ok(supportedStatus({
+      sessionWorktree: cwd === REPOSITORY ? null : COPY,
+    })))
+    harness.connection.setAnswer('prepare', () => {
+      cwd = COPY.path
+      return ok(prepareValue())
+    })
+    harness.connection.setAnswer('release', () => {
+      cwd = REPOSITORY
+      return ok(releaseValue())
+    })
 
     const view = renderChip(harness)
     await waitFor(() => { expect(view.view.getByText(`Worktree: ${COPY.name}`)).toBeTruthy() })
 
     fireEvent.click(switchOf(view))
-    await waitFor(() => { expect(switchOf(view).getAttribute('aria-checked')).toBe('false') })
+    await waitFor(() => { expect(view.view.getByText('Worktree off')).toBeTruthy() })
 
-    const chip = chipOf(view)
-    expect(chip.getAttribute('data-intent')).toBe('off')
-    expect(chip.getAttribute('data-phase')).toBe('ready')
-    expect(view.view.getByText(`Worktree: ${COPY.name}`)).toBeTruthy()
-    expect(chip.getAttribute('data-hint')).toContain(
-      `Applies to the next session; this one keeps ${COPY.name}.`,
-    )
+    const releases = harness.connection.callsFor('release')
+    expect(releases).toHaveLength(1)
+    expect(releases[0]!.payload).toEqual({ sessionId: SESSION })
+    expect(cwd).toBe(REPOSITORY)
+    expect(chipOf(view).getAttribute('data-phase')).toBe('off')
+    expect(chipOf(view).getAttribute('data-intent')).toBe('off')
+    expect(harness.blocks.reasonFor()).toBeUndefined()
     expect(storedIntent()).toEqual({ [REPOSITORY]: false })
 
     // A fresh runtime reusing the same storage remembers "off" for the project.
@@ -301,5 +313,78 @@ describe('turning isolation off for later sessions', () => {
     await waitFor(() => { expect(freshView.view.getByText('Worktree off')).toBeTruthy() })
     expect(switchOf(freshView).getAttribute('aria-checked')).toBe('false')
     expect(fresh.connection.callsFor('prepare')).toHaveLength(0)
+  })
+
+  it('keeps the composer inert and the switch busy while the session leaves', async () => {
+    const harness = await setup()
+    scriptStatus(harness, supportedStatus())
+    harness.connection.setAnswer('prepare', () => ok(prepareValue()))
+    let finish: ((result: ConnectionRpcResult<unknown>) => void) | undefined
+    harness.connection.setAnswer('release', () => new Promise(resolve => { finish = resolve }))
+
+    const view = renderChip(harness)
+    await waitFor(() => { expect(view.view.getByText(`Worktree: ${COPY.name}`)).toBeTruthy() })
+
+    fireEvent.click(switchOf(view))
+    await waitFor(() => { expect(chipOf(view).getAttribute('data-phase')).toBe('reverting') })
+    expect(view.view.getByText('Leaving worktree…')).toBeTruthy()
+    expect(switchOf(view).disabled).toBe(true)
+    expect(harness.blocks.reasonFor()).toBe(en['chip.blocked.reverting'])
+
+    await act(async () => {
+      finish?.(ok(releaseValue()))
+      await Promise.resolve()
+    })
+    await waitFor(() => { expect(view.view.getByText('Worktree off')).toBeTruthy() })
+    expect(harness.blocks.reasonFor()).toBeUndefined()
+  })
+
+  it('turning off while the copy is still being created leaves it once the host answers', async () => {
+    const harness = await setup()
+    scriptStatus(harness, supportedStatus())
+    let finishPrepare: ((result: ConnectionRpcResult<unknown>) => void) | undefined
+    harness.connection.setAnswer('prepare', () => new Promise(resolve => { finishPrepare = resolve }))
+    harness.connection.setAnswer('release', () => ok(releaseValue()))
+
+    const view = renderChip(harness)
+    await waitFor(() => { expect(chipOf(view).getAttribute('data-phase')).toBe('creating') })
+
+    fireEvent.click(switchOf(view))
+    await waitFor(() => { expect(chipOf(view).getAttribute('data-phase')).toBe('reverting') })
+
+    await act(async () => {
+      finishPrepare?.(ok(prepareValue()))
+      await Promise.resolve()
+    })
+    await waitFor(() => { expect(view.view.getByText('Worktree off')).toBeTruthy() })
+    expect(harness.connection.callsFor('release')).toHaveLength(1)
+  })
+
+  it('a remembered off finishes a leave an earlier page never completed', async () => {
+    globalThis.localStorage.setItem(INTENT_STORAGE_KEY, JSON.stringify({ [REPOSITORY]: false }))
+    const harness = await setup({ resetStorage: false })
+    scriptStatus(harness, supportedStatus({ sessionWorktree: COPY }))
+    harness.connection.setAnswer('release', () => ok(releaseValue()))
+
+    const view = renderChip(harness)
+    await waitFor(() => { expect(view.view.getByText('Worktree off')).toBeTruthy() })
+    expect(harness.connection.callsFor('release')).toHaveLength(1)
+    expect(harness.blocks.reasonFor()).toBeUndefined()
+  })
+
+  it('a refused release keeps the ready face and shows the reason', async () => {
+    const harness = await setup()
+    scriptStatus(harness, supportedStatus())
+    harness.connection.setAnswer('prepare', () => ok(prepareValue()))
+    harness.connection.setAnswer('release', () => fail('permission denied removing the checkout'))
+
+    const view = renderChip(harness)
+    await waitFor(() => { expect(view.view.getByText(`Worktree: ${COPY.name}`)).toBeTruthy() })
+
+    fireEvent.click(switchOf(view))
+    await waitFor(() => { expect(chipOf(view).getAttribute('data-phase')).toBe('ready') })
+    const hint = chipOf(view).getAttribute('data-hint')
+    expect(hint).toContain('permission denied removing the checkout')
+    expect(hint).toContain(en['chip.hint.intentOff'].replace('{name}', COPY.name))
   })
 })

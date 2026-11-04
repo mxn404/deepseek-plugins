@@ -38,6 +38,7 @@ export function chipLabel(state: ToggleState, t: Translate): string {
     case 'checking': return t('chip.checking')
     case 'off': return t('chip.off')
     case 'creating': return t('chip.creating')
+    case 'reverting': return t('chip.reverting')
     case 'ready': return t('chip.ready', { name: state.worktree?.name ?? '' })
     case 'failed': return t('chip.failed')
     case 'disabled': return t('chip.disabled')
@@ -55,6 +56,7 @@ export function chipHint(state: ToggleState, t: Translate): string {
     case 'checking': return t('chip.hint.checking')
     case 'off': return t('chip.hint.off')
     case 'creating': return t('chip.hint.creating')
+    case 'reverting': return t('chip.hint.reverting')
     case 'ready': {
       const parts = [t('chip.hint.ready', {
         branch: state.worktree?.branch ?? '',
@@ -62,6 +64,7 @@ export function chipHint(state: ToggleState, t: Translate): string {
       })]
       if (!state.intent) parts.push(t('chip.hint.intentOff', { name: state.worktree?.name ?? '' }))
       if (state.sourceDirty > 0) parts.push(t('chip.hint.dirty', { count: state.sourceDirty }))
+      if (state.error !== null) parts.push(state.error)
       return parts.join(' ')
     }
     case 'failed': {
@@ -94,16 +97,17 @@ export function WorktreeChip(props: WorktreeChipProps): ReactElement | null {
       return
     }
     // The copy must exist before the first prompt can leave; while the host is
-    // still answering, or while a copy the switch promised is being created or
-    // failed, the composer stays inert. Turning the switch off is the explicit
-    // way out, and the disabled face is not a promise of isolation.
+    // still answering, while a copy the switch promised is being created, or
+    // while the switch is moving the session back out of one, the composer
+    // stays inert. Turning the switch off is the explicit way out, and the
+    // disabled face is not a promise of isolation.
     const reason = state.phase === 'checking'
       ? t('chip.blocked.checking')
-      : !state.intent
-        ? null
-        : state.phase === 'creating'
-          ? t('chip.blocked.creating')
-          : state.phase === 'failed' ? t('chip.blocked.failed') : null
+      : state.phase === 'creating'
+        ? t('chip.blocked.creating')
+        : state.phase === 'reverting'
+          ? t('chip.blocked.reverting')
+          : state.phase === 'failed' && state.intent ? t('chip.blocked.failed') : null
     block(reason)
   }, [block, hero, state.intent, state.phase, t])
 
@@ -114,7 +118,7 @@ export function WorktreeChip(props: WorktreeChipProps): ReactElement | null {
   if (!hero) return null
 
   const hint = chipHint(state, t)
-  const locked = state.phase === 'checking' || state.phase === 'disabled'
+  const locked = state.phase === 'checking' || state.phase === 'disabled' || state.phase === 'reverting'
   return (
     <div
       className="dsh-wt-chip"

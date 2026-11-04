@@ -13,12 +13,12 @@ import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type {} from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
-import type { ListValue, PrepareValue, StatusValue, WorktreeItem, WorktreeRef } from '../types.ts'
+import type { ListValue, PrepareValue, ReleaseValue, StatusValue, WorktreeItem, WorktreeRef } from '../types.ts'
 import { readIntent, writeIntent } from './intent.ts'
 import { callHost } from './rpc.ts'
 
 /** Which of the switch's six faces is showing. */
-export type TogglePhase = 'checking' | 'off' | 'creating' | 'ready' | 'failed' | 'disabled'
+export type TogglePhase = 'checking' | 'off' | 'creating' | 'reverting' | 'ready' | 'failed' | 'disabled'
 
 /** One session's switch state. */
 export interface ToggleState {
@@ -108,6 +108,10 @@ class InternalBinding {
   private started = false
   /** The project whose remembered choice is in play; null until status answers. */
   private project: string | null = null
+  /** A create is in flight; a second one would race the same copy. */
+  private creating = false
+  /** The release in flight, shared by callers that ask to leave at once. */
+  private releasing: Promise<void> | null = null
 
   readonly face: ChipBinding
 
@@ -162,6 +166,9 @@ class InternalBinding {
       }
       if (status.sessionWorktree !== null) {
         this.store.set({ ...base, phase: 'ready' })
+        // The remembered position is "off", so this session should not be in a
+        // copy: finish a leave an earlier page (or a failed undo) left behind.
+        if (!intent) void this.release()
         return
       }
       if (!intent) {
@@ -178,8 +185,10 @@ class InternalBinding {
 
   /** Create the copy for a session the switch says should have one. */
   private async create(): Promise<void> {
+    if (this.creating) return
     const before = this.store.getSnapshot()
-    if (before.repositoryRoot === null) return
+    if (before.repositoryRoot === null || !before.intent) return
+    this.creating = true
     this.store.set({ ...before, phase: 'creating', error: null })
     try {
       const prepared = await callHost<PrepareValue>(
@@ -189,6 +198,13 @@ class InternalBinding {
         this.signal,
       )
       const now = this.store.getSnapshot()
+      if (!now.intent) {
+        // The user turned isolation off while the copy was being made: that is
+        // the position they asked for, so let the leave finish (it is either in
+        // flight or already done) rather than pretending they are isolated.
+        if (now.phase === 'reverting') void this.release()
+        return
+      }
       this.store.set({
         ...now,
         phase: 'ready',
@@ -201,24 +217,67 @@ class InternalBinding {
       if (this.signal.aborted) return
       const now = this.store.getSnapshot()
       if (!now.intent) {
-        // The user turned isolation off while the copy was being created: the
-        // switch position is what they asked for, so the failure is not news.
-        this.store.set({ ...now, phase: 'off', worktree: null, error: null })
+        if (now.phase === 'reverting') void this.release()
         return
       }
       this.store.set({ ...now, phase: 'failed', error: messageOf(error) })
+    } finally {
+      this.creating = false
+    }
+  }
+
+  /**
+   * Leave the copy this session runs in, so "off" means the project directory.
+   * Concurrent callers share one round trip.
+   * @returns completion of the leave.
+   */
+  private release(): Promise<void> {
+    const running = this.releasing
+    if (running !== null) return running
+    const operation = this.leave().finally(() => {
+      if (this.releasing === operation) this.releasing = null
+    })
+    this.releasing = operation
+    return operation
+  }
+
+  /** Ask the host to undo the copy and settle the switch on what it reported. */
+  private async leave(): Promise<void> {
+    const before = this.store.getSnapshot()
+    this.store.set({ ...before, phase: 'reverting', error: null })
+    try {
+      await callHost<ReleaseValue>(this.ctx, 'release', { sessionId: this.sessionId }, this.signal)
+      if (this.signal.aborted) return
+      const now = this.store.getSnapshot()
+      this.store.set({ ...now, phase: 'off', intent: false, worktree: null, error: null })
+    } catch (error) {
+      if (this.signal.aborted) return
+      const now = this.store.getSnapshot()
+      // A refused release leaves the session where it was. Showing "ready" with
+      // the reason is honest; showing "off" over a copy in use would not be.
+      this.store.set({
+        ...now,
+        phase: now.worktree === null ? 'off' : 'ready',
+        intent: false,
+        error: messageOf(error),
+      })
     }
   }
 
   /** Persist and apply one switch move. */
   setIntent(next: boolean): void {
     const state = this.store.getSnapshot()
-    if (state.phase === 'checking' || state.phase === 'disabled') return
+    if (state.phase === 'checking' || state.phase === 'disabled' || state.phase === 'reverting') return
     if (this.project !== null) writeIntent(this.project, next)
-    const phase = !next && state.phase === 'failed' ? 'off' : state.phase
-    this.store.set({ ...state, phase, intent: next, error: next ? state.error : null })
-    if (!next || state.intent === next) return
-    if (phase === 'off') void this.create()
+    if (!next) {
+      if (state.intent === next) return
+      this.store.set({ ...state, intent: false, error: null })
+      void this.release()
+      return
+    }
+    if (state.intent === next) return
+    this.store.set({ ...state, intent: true, error: null })
+    if (state.phase === 'off' || state.phase === 'failed') void this.create()
   }
 
   /** Re-run the host round trip with the switch on. */

@@ -191,6 +191,83 @@ describe('worktree toggle prepare', () => {
   })
 })
 
+describe('worktree toggle release', () => {
+  it('moves the session back and removes the copy the switch created', async () => {
+    const root = await repo()
+    const { ctx, agent, toggle } = await fixture(root)
+    const prepared = await toggle.prepare({ sessionId: agent.id })
+
+    const released = await toggle.release({ sessionId: agent.id })
+
+    expect(released).toEqual({ directory: root, removed: prepared.worktree, kept: null })
+    expect(ctx.workingDirectory.get(agent.session)).toBe(root)
+    await expect(stat(prepared.worktree.path)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await git(root, 'branch', '--list', prepared.worktree.branch)).toBe('')
+    expect(await worktreePaths(root)).toEqual([root])
+    const listed = await toggle.list({ path: root })
+    if (!listed.supported) throw new Error('expected a supported list')
+    expect(listed.items).toEqual([])
+  })
+
+  it('moves the session back from a subdirectory of a copy and still removes it', async () => {
+    const root = await repo()
+    const { ctx, agent, toggle } = await fixture(root)
+    const prepared = await toggle.prepare({ sessionId: agent.id })
+    const nested = join(prepared.worktree.path, 'packages', 'nested')
+    await mkdir(nested, { recursive: true })
+    await ctx.workingDirectory.set(agent, nested)
+
+    const released = await toggle.release({ sessionId: agent.id })
+
+    expect(released).toMatchObject({ directory: root, removed: { name: prepared.worktree.name } })
+    expect(ctx.workingDirectory.get(agent.session)).toBe(root)
+    await expect(stat(prepared.worktree.path)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('leaves a copy the switch did not create and still moves the session back', async () => {
+    const root = await repo()
+    const { ctx, agent, toggle } = await fixture(root)
+    const name = 'amber-atlas-b7a3'
+    const created = await ctx.worktrees.create(agent, { name, from: 'HEAD' })
+    expect(ctx.workingDirectory.get(agent.session)).toBe(created.path)
+
+    const released = await toggle.release({ sessionId: agent.id })
+
+    expect(released.directory).toBe(root)
+    expect(released.removed).toBeNull()
+    expect(released.kept).toMatchObject({ name, path: created.path })
+    expect(ctx.workingDirectory.get(agent.session)).toBe(root)
+    expect((await stat(created.path)).isDirectory()).toBe(true)
+    expect(await git(root, 'branch', '--list', name)).toContain(name)
+  })
+
+  it('keeps a dirty copy on disk but still moves the session back', async () => {
+    const root = await repo()
+    const { ctx, agent, toggle } = await fixture(root)
+    const prepared = await toggle.prepare({ sessionId: agent.id })
+    await writeFile(join(prepared.worktree.path, 'untracked.txt'), 'dirty\n')
+
+    const released = await toggle.release({ sessionId: agent.id })
+
+    expect(released.directory).toBe(root)
+    expect(released.removed).toBeNull()
+    expect(released.kept).toMatchObject({ name: prepared.worktree.name, branch: prepared.worktree.branch })
+    expect(ctx.workingDirectory.get(agent.session)).toBe(root)
+    expect((await stat(prepared.worktree.path)).isDirectory()).toBe(true)
+    expect(await git(root, 'branch', '--list', prepared.worktree.branch)).toContain(prepared.worktree.name)
+  })
+
+  it('is a no-op for a session that never ran in a copy', async () => {
+    const root = await repo()
+    const { ctx, agent, toggle } = await fixture(root)
+
+    const released = await toggle.release({ sessionId: agent.id })
+
+    expect(released).toEqual({ directory: root, removed: null, kept: null })
+    expect(ctx.workingDirectory.get(agent.session)).toBe(root)
+  })
+})
+
 describe('worktree toggle list', () => {
   it('lists the pool copy and never the main checkout', async () => {
     const root = await repo()
