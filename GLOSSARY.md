@@ -37,8 +37,10 @@ _Avoid_: 命中、访问、触碰事件
 
 **Hook point**（钩子点）:
 一条 hook 绑定到的 dsh 生命周期事件名，例如 `tool.pre` 或 `turn.stop`；它决定这条 hook 在
-宿主的哪个 seam 上运行、能产出哪些 outcome。
-_Avoid_: 事件、阶段、时机
+宿主的哪个 seam 上运行、能产出哪些 outcome。线上格式里这个字段的键固定叫 `event`（spec
+规定的 payload 键，也是 `DSH_HOOK_EVENT` 的值）；`event` 是格式 token，不是领域术语，文档
+里仍称 hook point。
+_Avoid_: 事件（作为领域词；线上键名 `event` 除外）、阶段、时机
 
 **Handler**（处理器）:
 hook 命中后实际执行的东西：一行 `builtin` 动作、一条 `command` 子进程，或一个进程内
@@ -46,8 +48,8 @@ hook 命中后实际执行的东西：一行 `builtin` 动作、一条 `command`
 _Avoid_: 动作、脚本、回调
 
 **Outcome**（结果）:
-handler 交回给插件的一份决策文档——`action`、`reason`、`context`、`replace`——同一事件点
-的 outcome 按固定优先级合并后，才交给宿主 seam 应用。
+handler 交回给插件的一份结果文档——`action`、`reason`、`context`、`replace`、`meta`——同一
+事件点的 outcome 按固定优先级合并后，才交给宿主 seam 应用。
 _Avoid_: 返回值、decision、结果对象
 
 **Source**（来源）:

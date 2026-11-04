@@ -13,8 +13,10 @@
 import type { HookMatch } from './match.ts'
 
 /**
- * Lifecycle points the `.dsh/hooks.json` vocabulary names. This build
- * dispatches the ones listed in {@link DispatchedHookEvent}.
+ * Lifecycle points the `.dsh/hooks.json` vocabulary names.
+ *
+ * Every one of them is dispatched by this build; {@link EVENT_ACTIONS} is the
+ * table the loader and the dispatch plans read for each point's action set.
  */
 export type HookEvent =
   | 'session.start'
@@ -27,24 +29,13 @@ export type HookEvent =
   | 'notification'
 
 /**
- * Lifecycle points this build dispatches. A later ticket adds its event here
- * and to {@link EVENT_ACTIONS}; the loader derives its supported set from that
- * table, so an entry for any other named event is skipped with one warning.
- */
-export type DispatchedHookEvent =
-  | 'session.start'
-  | 'step.start'
-  | 'tool.pre'
-  | 'tool.post'
-  | 'tool.result'
-  | 'turn.stop'
-  | 'session.end'
-  | 'notification'
-
-/**
- * Actions each dispatched event applies. This is the single authority the
- * loader validates against and the dispatch plans read from, so an entry can
- * never carry an action its event would silently ignore:
+ * Actions each dispatched event applies: the dispatch authority.
+ *
+ * The dispatch plans read their action list from this table and the dispatcher
+ * filters every handler kind against it, so an entry can never carry an action
+ * its event would silently ignore. (The loader also has a builtin-specific
+ * gate, `BUILTIN_ACTIONS` in `hooks-file.ts`, a subset of this table: it exists
+ * only where a builtin would be a no-op, and README documents both.)
  *
  * - `session.start` only adds context — it fires before a turn exists, so it
  *   has nothing to deny, halt, or ask about.
@@ -59,10 +50,11 @@ export type DispatchedHookEvent =
  *   work before it happens.
  * - `tool.result`, `session.end`, and `notification` are observe-only: they
  *   fire after the host has already committed the thing they report, so there
- *   is no decision to apply. Their empty action list is what forces their
- *   command handlers detached and rejects their builtin entries at load time.
+ *   is no outcome to apply. Their empty action list is what forces their
+ *   command and module handlers detached and rejects their builtin entries at
+ *   load time.
  */
-export const EVENT_ACTIONS: Readonly<Record<DispatchedHookEvent, readonly HookAction[]>> = {
+export const EVENT_ACTIONS: Readonly<Record<HookEvent, readonly HookAction[]>> = {
   'session.start': ['context'],
   'step.start': ['deny', 'context', 'halt'],
   'tool.pre': ['deny', 'ask', 'context', 'halt'],
@@ -77,13 +69,13 @@ export const EVENT_ACTIONS: Readonly<Record<DispatchedHookEvent, readonly HookAc
  * Whether an event only observes.
  *
  * Observe-only events report something the host has already committed and have
- * no decision to merge, so their command handlers never participate in the
- * event: the loader forces them detached, and a builtin entry at one is a
- * configuration mistake it skips with a warning.
+ * no outcome to merge, so their command and module handlers never participate
+ * in the event: the loader forces them detached, and a builtin entry at one is
+ * a configuration mistake it skips with a warning.
  * @param event - the lifecycle point to classify.
  * @returns true for an event whose {@link EVENT_ACTIONS} list is empty.
  */
-export function isObserveOnly(event: DispatchedHookEvent): boolean {
+export function isObserveOnly(event: HookEvent): boolean {
   return EVENT_ACTIONS[event].length === 0
 }
 
@@ -107,11 +99,24 @@ export type HookAction =
   | 'inject'
   | 'replace'
 
-/** Actions a `builtin` handler can decide without running anything. */
-export type BuiltinAction = Extract<
-  HookAction,
-  'deny' | 'ask' | 'block' | 'replace' | 'inject' | 'context' | 'halt' | 'continue'
->
+/**
+ * Every action the outcome vocabulary names, in one place.
+ *
+ * The loader's unknown-action check and the command/module outcome decoder read
+ * this same set, so a new action is added once and both gates learn it
+ * together. Event legality stays in {@link EVENT_ACTIONS}; this is the wire
+ * vocabulary, not a promise that every event supports every action.
+ */
+export const KNOWN_ACTIONS: ReadonlySet<string> = new Set<HookAction>([
+  'deny',
+  'ask',
+  'block',
+  'continue',
+  'halt',
+  'context',
+  'inject',
+  'replace',
+])
 
 /**
  * Whether a failing hook lets the event through (`open`, the default) or turns
@@ -120,24 +125,24 @@ export type BuiltinAction = Extract<
 export type HookFailurePolicy = 'open' | 'block'
 
 /**
- * A one-line builtin decision, applied without running anything.
+ * A one-line builtin outcome, applied without running anything.
  *
  * The spec's builtin vocabulary is `{action, reason?, text?}`: a blocking or
  * asking action carries a `reason`, `context` and `inject` carry the reminder
  * `text`, and `replace` carries the model-visible `text` that replaces the tool
  * result. The event's own load gate decides which of them an entry may name; an
- * `ask` there is a request for the host's approval flow, never a decision.
+ * `ask` there is a request for the host's approval flow, never an outcome.
  */
 export type BuiltinRun =
   | {
       readonly type: 'builtin'
-      readonly action: Extract<BuiltinAction, 'deny' | 'ask' | 'block' | 'halt'>
+      readonly action: Extract<HookAction, 'deny' | 'ask' | 'block' | 'halt'>
       /** Model-facing reason; the loader defaults it, so never empty. */
       readonly reason: string
     }
   | {
       readonly type: 'builtin'
-      readonly action: Extract<BuiltinAction, 'replace' | 'inject' | 'context'>
+      readonly action: Extract<HookAction, 'replace' | 'inject' | 'context'>
       /** Reminder line (`context`, `inject`) or replacement text (`replace`). */
       readonly text: string
     }
@@ -161,7 +166,7 @@ export interface CommandRun {
   /** Shell command line, executed in the Session's current directory. */
   readonly command: string
   /**
-   * Detached run: it never contributes to the event's decision, so the event
+   * Detached run: it never contributes to the event's outcome, so the event
    * does not wait for it. Its side effect and its audit row still happen; the
    * plugin aborts it on disposal if it is still running.
    */
@@ -181,7 +186,7 @@ export interface ModuleRun {
   /** Module path as written; resolved against the hooks file's directory. */
   readonly path: string
   /**
-   * Detached run: it never contributes to the event's decision, so the event
+   * Detached run: it never contributes to the event's outcome, so the event
    * does not wait for it. Its side effects and its audit row still happen, and
    * its helpers stop working once the plugin is disposed.
    */
@@ -192,7 +197,7 @@ export interface ModuleRun {
 export type HookHandler = BuiltinRun | CommandRun | ModuleRun
 
 /**
- * Whether a handler kind runs detached from its event's decision.
+ * Whether a handler kind runs detached from its event's outcome.
  * @param run - the entry's handler.
  * @returns true when the event must not wait for it.
  */
@@ -209,8 +214,8 @@ export interface ApprovalDisplayReason {
   readonly [locale: string]: string
 }
 
-/** One hook run's contribution to its event's decision. */
-export interface HookDecision {
+/** One hook run's contribution to its event's outcome. */
+export interface HookOutcome {
   /**
    * What the hook asks the event to do. Absent when the hook only adds
    * context; an action the event does not support is warned about and ignored.
@@ -230,6 +235,12 @@ export interface HookDecision {
    * `tool.post` consumes it, and never for the canonical `value`.
    */
   readonly replace?: { readonly text: string }
+  /**
+   * Free-form audit metadata the handler attached to its outcome. It is
+   * carried through the merge and written to the audit record; no event plan
+   * acts on it.
+   */
+  readonly meta?: Record<string, unknown>
 }
 
 /** One validated hook entry. */
@@ -237,7 +248,7 @@ export interface Hook {
   /** Entry identity, unique within its file by convention and logged with every run. */
   readonly id: string
   /** Lifecycle point; one of the events this build dispatches. */
-  readonly on: DispatchedHookEvent
+  readonly on: HookEvent
   /** Which calls or steps it selects; `undefined` selects everything at that point. */
   readonly match: HookMatch | undefined
   /** What it does when it matches. */

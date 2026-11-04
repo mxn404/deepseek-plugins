@@ -9,7 +9,7 @@ handler：一行 `builtin`、一个子进程 `command`、或一个进程内 `mod
 
 它是原生实现，不是桥：事件名、payload、outcome 都来自 dsh 的扩展点，**不复用** Claude Code
 的 `hook/*` 方言，也不读 `.claude/`。要跑现有 Claude Code hooks 请装
-`dsh-hooks-claude-code`；要跨 session 的通知/审计面板请看第三方 `dsh-hooks`（见
+`@deepseek-ai/dsh-hooks-claude-code`；要跨 session 的通知/审计面板请看第三方 `dsh-hooks`（见
 [与其它 hook 插件的区别](#与其它-hook-插件的区别)）。
 
 本插件实现 spec [#7](https://github.com/mxn404/deepseek-plugins/issues/7)。设计取舍见
@@ -96,7 +96,8 @@ overlay 里这一行的 `name` 要写成插件包的绝对路径，否则从仓�
 
 - `block-rm` 命中时工具**不执行**，模型收到的工具结果是 `Error: rm -rf is blocked by .dsh/hooks.json`。
 - `format-after-write` 指向 `.dsh/hooks/format.mjs`（路径相对**声明它的 hooks 文件所在目录**）。
-- `notify-approval` 在每次审批请求或 agent 错误时脱手跑一次，不参与任何决策。
+- `notify-approval` 在每次审批请求或 agent 错误时脱手跑一次，不参与任何决策；审批通知要求
+  该 session 的 agent 仍活着，agent 已销毁的审批请求会被跳过。
 
 没有 `.dsh/hooks.json` 的仓库零打扰：不注入消息、不打日志、不写记录。
 
@@ -208,7 +209,7 @@ overlay 里这一行的 `name` 要写成插件包的绝对路径，否则从仓�
 
 五个事件参与决策，三个只观察。`session.start` 只能加 context，`turn.stop` 只能
 `continue`；`tool.result` / `session.end` / `notification` 发生在宿主已经提交事实之后，
-没有可应用的 decision，它们的 command/module **一律强制脱手**，builtin 条目在加载时跳过。
+没有可应用的 outcome，它们的 command/module **一律强制脱手**，builtin 条目在加载时跳过。
 
 | 事件 | dsh 扩展点 | match 维度 | 可用 outcome | 阶段与可观测性 |
 |---|---|---|---|---|
@@ -223,8 +224,8 @@ overlay 里这一行的 `name` 要写成插件包的绝对路径，否则从仓�
 
 **阻塞与只观察的差别**：`session.start` / `step.start` / `tool.pre` / `tool.post` 能改变
 宿主接下来的行为；`turn.stop` 只决定本轮是否再走一步；`tool.result` / `session.end` /
-`notification` 只能记录和通知——在它们上面返回 outcome 不会生效，插件 warn 一句并保留
-它带的 context。
+`notification` 只能记录和通知——在它们上面返回 outcome 不会生效，插件 warn 一句；只观察
+事件没有合并阶段，所以它带的 context 也不会送达。
 
 ## Handler
 
@@ -236,18 +237,20 @@ builtin 动作。
 
 | 事件 | builtin 可用动作 | 写法 |
 |---|---|---|
-| `session.start` | `context` | `{ "action": "context", "text": "…" }` |
-| `step.start` | `deny` / `context` / `halt` | `{ "action": "deny", "reason": "…" }`（`halt` 可不写 reason） |
-| `tool.pre` | `deny` / `ask` | `{ "action": "deny", "reason": "…" }` / `{ "action": "ask", "reason": "…" }` |
-| `tool.post` | `block` / `replace` / `inject` | `{ "action": "block", "reason": "…" }` / `{ "action": "replace", "text": "…" }` / `{ "action": "inject", "text": "…" }` |
+| `session.start` | `context` / `inject` | `{ "action": "context", "text": "…" }`（`inject` 等价） |
+| `step.start` | `deny` / `context` / `inject` / `halt` | `{ "action": "deny", "reason": "…" }`（`halt` 可不写 reason） |
+| `tool.pre` | `deny` / `ask` / `context` / `inject` / `halt` | `{ "action": "deny", "reason": "…" }` / `{ "action": "ask", "reason": "…" }` / `{ "action": "halt", "reason": "…" }` |
+| `tool.post` | `block` / `replace` / `context` / `inject` / `halt` | `{ "action": "block", "reason": "…" }` / `{ "action": "replace", "text": "…" }` / `{ "action": "halt", "reason": "…" }` |
 | `turn.stop` | `continue` | `{ "action": "continue", "reason": "…" }`（reason 可省） |
 | 三个只观察事件 | 无 | 用 `command` / `module`；写 builtin 会在加载时跳过并 warn |
 
 `reason` 是模型可见的阻断理由，缺省时按动作补一句默认文案；`text` 是 context / inject
 的提醒行，或 replace 的替换文本，必须非空；`continue` 的 `reason` 可省，多个 continue
 的理由会按顺序拼进同一条 steer 消息。`inject` 是 builtin 词汇里「补一句 context」的动作，
-本插件把它折算成 `context` 的一条文本。`tool.pre` 的 builtin 只开放 `deny` 与 `ask`；
-该事件上的 `context` / `halt` 由 command 或 module 提供。
+本插件把它折算成 `context` 的一条文本；两种写法在 `session.start` / `step.start` /
+`tool.pre` / `tool.post` 上等价。`halt` 只在有 turn 可取消的可决策事件上合法
+（`step.start` / `tool.pre` / `tool.post`）；`session.start` 与 `turn.stop` 上的 halt
+在加载时跳过并 warn。
 
 ### command
 
@@ -275,8 +278,10 @@ builtin 动作。
 - **env** 至少带 `DSH_HOOK_EVENT`、`DSH_HOOK_SESSION_ID`、`DSH_HOOK_CWD`、
   `DSH_HOOK_TURN`、`DSH_HOOK_STEP`、`DSH_HOOK_ID`，与 stdin 的对应字段一致。
 - **stdout** 只认**一个** JSON outcome：
-  `{ "action": …, "reason": …, "displayReason": { "en": … }, "context": [ … ], "replace": { "text": … } }`。
+  `{ "action": …, "reason": …, "displayReason": { "en": … }, "context": [ … ], "replace": { "text": … }, "meta": { … } }`。
   空输出等于「没有动作」；只写 `{ "replace": { "text": … } }` 也合法（等价于 `replace`）。
+  `meta` 是自由格式的 JSON 对象（数组不算），只随审计记录落盘，不改变事件行为；写了非 JSON
+  对象是协议错误，按运行失败处理。
 - **失败**：非零退出、stdout 不是 JSON、`replace.value`（协议错误）、超时都按运行失败处理，
   默认放行（见 `onFailure`）。超时由宿主 shell 执行器杀掉**整个进程组**。
 - **异步**：`async: true` 的条目脱手执行，只做副作用、不参与决策，插件销毁时会被中止。
@@ -361,9 +366,13 @@ export default async (ctx) => {
 3. `ask` —— 只在 `tool.pre` 生效；多个 ask 取第一条，不弹第二次。
 4. `continue` —— 只在 `turn.stop` 生效；所有 continue 的理由按顺序拼成**一条** steer 消息。
 5. `replace` —— 最后一个生效，后面的 hook 可以精修前面的替换。
-6. `context` —— 全部保留，按配置顺序拼接；即使 `block` / `deny` 胜出，context 也保留。
+6. `context` —— 全部保留，按配置顺序拼接；`tool.pre` 的 `deny` 和 `tool.post` 的
+   `block` / `replace` 胜出时仍会送达模型，但 `step.start` 的 `deny` 直接 reject 这一步
+   （context 无处落地），任何事件的 `halt` 也不注入 context。
+7. `meta` —— 不参与优先级；各 run 的审计文档按配置顺序最后一个生效，只写进合并结果与审计记录。
 
-事件不支持的 action 会 warn 一句并忽略，但保留它带的 context。同一事件点的全部 context
+事件不支持的 action 会 warn 一句并忽略，但保留它带的 context（只观察事件没有合并阶段，
+整份 outcome 只会 warn）。同一事件点的全部 context
 拼成**一条** user 消息，包成 `<system-reminder>`，message source 标
 `dsh-lifecycle-hooks`（`src/context.ts` 是唯一的 message 形状与 source 声明）。送达方式：
 `session.start` / `tool.pre` 用 `agent.inject`，`step.start` 折进 `enter.messages`，
@@ -404,18 +413,25 @@ deny 本次调用，`tool.post` 的 halt 同时把该结果变成错误，模型
   "handler": "command",
   "action": "deny",
   "duration_ms": 42,
-  "exit_code": 0
+  "exit_code": 0,
+  "meta": { "rule": "no-rm", "severity": 2 }
 }
 ```
 
 - `action` 是这次运行**自己产出**的动作（`deny` / `ask` / `block` / `replace` / `halt` /
   `continue`），不代表事件一定采纳了它；只带 context 的运行没有 `action`。
+- `meta` 只在 handler 的 outcome 里给了这个字段时出现；它是审计数据，宿主与插件都不据此
+  改变行为。
 - `exit_code` 只在 command 运行拿到退出码时出现（超时被杀、被信号杀死时没有）。
 - `continued_count` 只在 `turn.stop` 的每条记录上出现（本次 stop 之前该 turn 已授予的
   连续 continue 次数）。
 - `error` 只在运行失败时出现；`onFailure: "block"` 时同一条记录会同时带 `error` 与合成的
   `action`。
-- `audit: false` 时完全不写。本插件没有 UI，日志与这条记录是唯一的事后可观测面。
+- **写不进 Session 时兜底到文件**：实验性的 plugin-record API 不可用、或宿主拒收这条记录
+  时，同一份 payload 会以一行一条 JSON 的形式追加到 `<session cwd>/.dsh/hooks-audit.jsonl`，
+  每个文件只 warn 一次；成功的记录路径**不会**产生这个文件。
+- `audit: false` 时完全不写——Session 记录与文件兜底都不写。本插件没有 UI，日志与这条记录
+  是唯一的事后可观测面。
 
 `ask` 的最终结果**不在**插件记录里：宿主在插件返回 `{ kind: 'ask' }` 之后才问 answerer，
 并把结果写成同一条 session 里的 durable 事件对——`approval/asked`（`toolName`、`callId`、
@@ -455,7 +471,7 @@ deny 本次调用，`tool.post` 的 halt 同时把该结果变成错误，模型
 
 ## 与其它 hook 插件的区别
 
-| | `dsh-lifecycle-hooks`（本插件） | 第三方 `dsh-hooks`（npm 0.14.x） | `dsh-hooks-claude-code` |
+| | `dsh-lifecycle-hooks`（本插件） | 第三方 `dsh-hooks`（npm 0.14.x） | `@deepseek-ai/dsh-hooks-claude-code` |
 |---|---|---|---|
 | 定位 | 仓库级的**阻塞 / 改写**运行时 | 跨 session 的**通知 / 审计**运行时 | Claude Code 方言兼容层 |
 | 配置位置 | 仓库 `.dsh/hooks.json` + 用户级三层 | profile 配置 | CC 的 `configPath`（进程级） |
@@ -471,7 +487,7 @@ deny 本次调用，`tool.post` 的 halt 同时把该结果变成错误，模型
 - 想让**团队规则随仓库提交**、在工具执行前拦截、在结果回到模型前脱敏、在 stop 前跑测试 →
   本插件。
 - 想要**跨项目的通知汇总 / 审计面板**、不想让 hook 影响 agent 循环 → 第三方 `dsh-hooks`。
-- 手上已有 `.claude/settings.json` 的 hooks，需要它们继续跑 → `dsh-hooks-claude-code`；
+- 手上已有 `.claude/settings.json` 的 hooks，需要它们继续跑 → `@deepseek-ai/dsh-hooks-claude-code`；
   本插件**故意**不复用 `hook/*` 事件，两者可以同时安装，但不要为同一条规则配两遍。
 
 ## 已接受的盲区

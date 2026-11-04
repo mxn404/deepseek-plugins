@@ -104,7 +104,7 @@ emit({ replace: { text: 'OBSERVER REWROTE THIS' } })
       result: { is_error: false },
     })
     expect(contentText((observed.result as { content: unknown }).content)).toContain('FINAL-TOOL-OUTPUT')
-    // The decision fields were ignored with one warning that names the event.
+    // The outcome fields were ignored with one warning that names the event.
     expect(harness.pluginWarnings.some(
       warning => warning.includes('tool.result') && warning.includes('observes'),
     )).toBe(true)
@@ -274,7 +274,7 @@ process.exitCode = 1
     expect(harness.pluginWarnings.some(
       warning => warning.includes('"broken"') && warning.includes('failed'),
     )).toBe(true)
-    // A failing observer is not a decision: no action was applied.
+    // A failing observer is not an outcome: no action was applied.
     expect(adapter.requests[1]!.messages.some(
       message => message.role === 'tool' && message.isError,
     )).toBe(false)

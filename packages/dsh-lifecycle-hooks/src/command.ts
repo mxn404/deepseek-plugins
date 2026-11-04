@@ -23,7 +23,7 @@
  * `ctx.shell` owns the timeout, the process-group kill, the credential scrub,
  * and the output caps; this module never spawns directly.
  *
- * The outcome vocabulary is validated by {@link decodeDecision}, which the
+ * The outcome vocabulary is validated by {@link decodeOutcomeValue}, which the
  * `module` handler shares: a module's return value is the same document a
  * script writes to stdout, validated once.
  *
@@ -31,20 +31,9 @@
  */
 
 import type { ShellExecution, ShellExecutor, ShellRunResult } from '@deepseek-ai/dsh-shell'
-import type { ApprovalDisplayReason, HookAction, HookDecision } from './hook.ts'
+import { KNOWN_ACTIONS, type ApprovalDisplayReason, type HookAction, type HookOutcome } from './hook.ts'
 import { isRecord } from './match.ts'
-
-/** Actions the `.dsh/hooks.json` outcome vocabulary knows. */
-const KNOWN_ACTIONS: ReadonlySet<string> = new Set<HookAction>([
-  'deny',
-  'ask',
-  'block',
-  'continue',
-  'halt',
-  'context',
-  'inject',
-  'replace',
-])
+import { messageOf } from './message.ts'
 
 /** How much of a failure's stderr the log line keeps. */
 const STDERR_EXCERPT_CHARS = 300
@@ -52,7 +41,7 @@ const STDERR_EXCERPT_CHARS = 300
 /** The decoded stdout of one command run. */
 export interface CommandDecode {
   /** The outcome the script reported, or `undefined` for empty output. */
-  readonly decision: HookDecision | undefined
+  readonly outcome: HookOutcome | undefined
   /** Why the stdout did not honour the protocol, or `undefined` when it did. */
   readonly error: string | undefined
 }
@@ -78,10 +67,10 @@ export interface CommandOptions {
 /** What one command run produced. */
 export interface CommandResult {
   /** The outcome the script reported, if any. */
-  readonly decision: HookDecision | undefined
+  readonly outcome: HookOutcome | undefined
   /** Process exit code; absent when the process never produced one. */
   readonly exitCode: number | undefined
-  /** Why the run failed, if it did; a failed run contributes no decision. */
+  /** Why the run failed, if it did; a failed run contributes no outcome. */
   readonly error: string | undefined
 }
 
@@ -90,18 +79,18 @@ export interface CommandResult {
  *
  * Total: a malformed document becomes a failure description, never a throw.
  * @param stdout - the process's captured standard output.
- * @returns the decoded decision plus any protocol error.
+ * @returns the decoded outcome plus any protocol error.
  */
 export function decodeOutcome(stdout: string): CommandDecode {
   const text = stdout.trim()
-  if (text.length === 0) return { decision: undefined, error: undefined }
+  if (text.length === 0) return { outcome: undefined, error: undefined }
   let raw: unknown
   try {
     raw = JSON.parse(text)
   } catch (error) {
-    return { decision: undefined, error: `stdout is not a single JSON outcome: ${messageOf(error)}` }
+    return { outcome: undefined, error: `stdout is not a single JSON outcome: ${messageOf(error)}` }
   }
-  return decodeDecision(raw)
+  return decodeOutcomeValue(raw)
 }
 
 /**
@@ -111,10 +100,10 @@ export function decodeOutcome(stdout: string): CommandDecode {
  * a module through its return value — so the validation lives here once.
  * @param raw - the parsed value.
  * @param subject - what produced it, for the failure message (`stdout`, `module result`).
- * @returns the decoded decision plus any protocol error.
+ * @returns the decoded outcome plus any protocol error.
  */
-export function decodeDecision(raw: unknown, subject = 'stdout'): CommandDecode {
-  if (!isRecord(raw)) return { decision: undefined, error: `${subject} must be a JSON object` }
+export function decodeOutcomeValue(raw: unknown, subject = 'stdout'): CommandDecode {
+  if (!isRecord(raw)) return { outcome: undefined, error: `${subject} must be a JSON object` }
 
   let action: HookAction | undefined
   if (raw.action !== undefined) {
@@ -140,8 +129,10 @@ export function decodeDecision(raw: unknown, subject = 'stdout'): CommandDecode 
   }
   const display = decodeDisplayReason(raw.displayReason)
   if ('error' in display) return protocolError(display.error)
+  const meta = decodeMeta(raw.meta)
+  if ('error' in meta) return protocolError(meta.error)
 
-  const decision: HookDecision = {
+  const outcome: HookOutcome = {
     // A bare `{replace:{text}}` is the spec's replace outcome; the action is
     // derived so the audit row and the merge rank it like any other action.
     ...action === undefined && replace.replace === undefined
@@ -151,9 +142,12 @@ export function decodeDecision(raw: unknown, subject = 'stdout'): CommandDecode 
     ...display.displayReason === undefined ? {} : { displayReason: display.displayReason },
     ...context === undefined ? {} : { context },
     ...replace.replace === undefined ? {} : { replace: replace.replace },
+    ...meta.meta === undefined ? {} : { meta: meta.meta },
   }
-  const decided = decision.action !== undefined || decision.context !== undefined
-  return { decision: decided ? decision : undefined, error: undefined }
+  const decided = outcome.action !== undefined
+    || outcome.context !== undefined
+    || outcome.meta !== undefined
+  return { outcome: decided ? outcome : undefined, error: undefined }
 }
 
 /**
@@ -163,7 +157,7 @@ export function decodeDecision(raw: unknown, subject = 'stdout'): CommandDecode 
  * timeout, and a non-zero exit all come back as a failed {@link CommandResult},
  * which the dispatcher records and applies the entry's failure policy to.
  * @param options - the command, its input, and its execution facts.
- * @returns the run's decision, exit code, and failure detail.
+ * @returns the run's outcome, exit code, and failure detail.
  */
 export async function runCommand(options: CommandOptions): Promise<CommandResult> {
   const shell = options.shell
@@ -203,7 +197,7 @@ export async function runCommand(options: CommandOptions): Promise<CommandResult
   }
 
   const decoded = decodeOutcome(result.stdout.text)
-  return { decision: decoded.decision, exitCode, error: decoded.error }
+  return { outcome: decoded.outcome, exitCode, error: decoded.error }
 }
 
 /** Decoded `displayReason` field: the localized copy, its absence, or a protocol error. */
@@ -231,6 +225,79 @@ function decodeDisplayReason(raw: unknown): DisplayReasonDecode {
     if (typeof text !== 'string') return { error: `"displayReason" values must be strings: ${locale}` }
   }
   return { displayReason: raw as unknown as ApprovalDisplayReason }
+}
+
+/** Decoded `meta` field: the audit document, its absence, or a protocol error. */
+type MetaDecode =
+  | { readonly meta: Record<string, unknown> | undefined }
+  | { readonly error: string }
+
+/**
+ * Decode the optional `meta` field, the handler's free-form audit document.
+ *
+ * It is part of the outcome protocol but not of any action: the merge and the
+ * audit record carry it, and no event plan reads it. Only a JSON object is
+ * accepted (a JSON array is not), and every nested value has to be
+ * JSON-serializable — the audit writer snapshots the record losslessly, so an
+ * unserializable value would otherwise turn into a failed write instead of a
+ * clear protocol error.
+ * @param raw - the outcome's `meta` value.
+ * @returns the audit document, its absence, or the reason to fail the run.
+ */
+function decodeMeta(raw: unknown): MetaDecode {
+  if (raw === undefined) return { meta: undefined }
+  if (!isJsonObject(raw)) return { error: '"meta" must be a JSON object' }
+  return { meta: raw }
+}
+
+/**
+ * Whether a value is a losslessly JSON-serializable object.
+ * @param value - the value to inspect.
+ * @param seen - objects on the current path, so a cycle is rejected, not traversed forever.
+ * @returns true for a plain object whose every nested value is JSON data.
+ */
+function isJsonObject(value: unknown, seen: WeakSet<object> = new WeakSet()): value is Record<string, unknown> {
+  if (!isRecord(value)) return false
+  const prototype = Object.getPrototypeOf(value)
+  if (prototype !== Object.prototype && prototype !== null) return false
+  if (seen.has(value)) return false
+  seen.add(value)
+  try {
+    return Object.values(value).every(entry => isJsonValue(entry, seen))
+  } finally {
+    seen.delete(value)
+  }
+}
+
+/**
+ * Whether a value can survive `JSON.stringify` without losing data.
+ * @param value - the value to inspect.
+ * @param seen - objects on the current path, so a cycle is rejected, not traversed forever.
+ * @returns true for strings, finite numbers, booleans, null, arrays, and plain objects.
+ */
+function isJsonValue(value: unknown, seen: WeakSet<object>): boolean {
+  if (value === null) return true
+  switch (typeof value) {
+    case 'string':
+    case 'boolean':
+      return true
+    case 'number':
+      return Number.isFinite(value)
+    case 'object':
+      break
+    default:
+      return false
+  }
+  if (Array.isArray(value)) {
+    if (seen.has(value)) return false
+    seen.add(value)
+    try {
+      return value.every(entry => isJsonValue(entry, seen))
+    } finally {
+      seen.delete(value)
+    }
+  }
+  return isJsonObject(value, seen)
 }
 
 /** Decoded `replace` field: the replacement, no replacement written, or a protocol error. */
@@ -265,7 +332,7 @@ function decodeReplace(raw: unknown): ReplaceDecode {
  * @returns the failure shape {@link decodeOutcome} answers with.
  */
 function protocolError(message: string): CommandDecode {
-  return { decision: undefined, error: message }
+  return { outcome: undefined, error: message }
 }
 
 /**
@@ -275,7 +342,7 @@ function protocolError(message: string): CommandDecode {
  * @returns the failed result.
  */
 function failed(exitCode: number | undefined, error: string): CommandResult {
-  return { decision: undefined, exitCode, error }
+  return { outcome: undefined, exitCode, error }
 }
 
 /**
@@ -288,13 +355,4 @@ function excerpt(stderr: string): string {
   if (text.length === 0) return ''
   const clipped = text.length > STDERR_EXCERPT_CHARS ? `${text.slice(0, STDERR_EXCERPT_CHARS)}…` : text
   return `: ${clipped}`
-}
-
-/**
- * Render one caught value for a failure message.
- * @param error - anything thrown.
- * @returns a single-line description.
- */
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }

@@ -40,10 +40,5 @@ export function toolResultPlan(
         result: { is_error: result.isError, content: result.content },
       },
     },
-    // Every run at this event is detached, so no decision can reach the host;
-    // this applier exists only to satisfy the plan shape.
-    apply(): undefined {
-      return undefined
-    },
   }
 }

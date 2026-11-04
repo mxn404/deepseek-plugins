@@ -3,8 +3,9 @@
 dsh 的扩展点已经足够密：`agent/created`、`agent/pre-step`、`tools/pre-execute`、
 `tools/post-execute`、`tools/result`、`agent/turn-stopping`、`agent/disposed`，加上持久
 的 `approval/asked` 与 Cordis 的 `agent/error`。缺的不是扩展点，而是「把这些点上的用户
-逻辑写进仓库、按项目生效、改完即生效」的载体。仓库里已有 `dsh-hooks-claude-code`：它把
-Claude Code 的 `hook/*` 方言翻译到 dsh，只跑 command，`configPath` 是进程级的、启动时读
+逻辑写进仓库、按项目生效、改完即生效」的载体。dsh harness 生态里已有
+`@deepseek-ai/dsh-hooks-claude-code`（随 harness checkout 发布，不在本仓库）：它把 Claude
+Code 的 `hook/*` 方言翻译到 dsh，只跑 command，`configPath` 是进程级的、启动时读
 一次；第三方 `dsh-hooks` 则是通知/审计用的 fire-and-forget 运行时，明确不阻塞 agent 循环。
 两者都不是「仓库级、可决策、原生」的那一格。
 
@@ -37,7 +38,7 @@ Claude Code 的 `hook/*` 方言翻译到 dsh，只跑 command，`configPath` 是
 ## 后果
 
 - **从 Claude Code 迁过来的用户不能直接复用配置**：事件名、payload 字段、outcome 结构都
-  不同。README 明确写了这一点，并指向 `dsh-hooks-claude-code` 作为兼容选择。
+  不同。README 明确写了这一点，并指向 `@deepseek-ai/dsh-hooks-claude-code` 作为兼容选择。
 - 两个插件可以共存：一个消费 `hook/*`，一个消费 dsh 原生事件。它们互不 import，也不共享
   配置；同一行为不要配两遍，否则会执行两次。
 - 本插件的语义跟着 dsh 走。dsh 的 seam 一旦变化，影响面是明确的（`EVENT_ACTIONS` 与各
@@ -49,7 +50,7 @@ Claude Code 的 `hook/*` 方言翻译到 dsh，只跑 command，`configPath` 是
 
 ## 考虑过但不选的
 
-- **扩展 `dsh-hooks-claude-code`**：它的单一职责是方言桥，配置生命周期和 handler 形态都
+- **扩展 `@deepseek-ai/dsh-hooks-claude-code`**：它的单一职责是方言桥，配置生命周期和 handler 形态都
   与仓库级决策运行时冲突。要满足本 spec，得重写它的大半，还会破坏现有 CC 用户的预期。
 - **给每个仓库生成一个 Cordis 插件**：要建包、构建、装 profile、重启，正是本插件要消掉的
   摩擦，而且无法随仓库共享。

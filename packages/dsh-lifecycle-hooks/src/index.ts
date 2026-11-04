@@ -20,7 +20,7 @@
  * reading and validating one hooks file in `hooks-file.ts`, matching in
  * `match.ts`, execution in `handler.ts` / `command.ts` / `module.ts`, the per-event payload in
  * `payload.ts`, the single resolve→run→record→merge→apply pipeline in
- * `dispatch.ts`, the decision ranking in `outcome.ts`, the events' plans in
+ * `dispatch.ts`, the outcome ranking in `outcome.ts`, the events' plans in
  * `session-start.ts` / `step-start.ts` / `tool-pre.ts` / `tool-post.ts` /
  * `tool-result.ts` / `turn-stop.ts` / `session-end.ts` / `notification.ts`, and
  * the audit row in `audit.ts`. `apply` only connects them to the host: the

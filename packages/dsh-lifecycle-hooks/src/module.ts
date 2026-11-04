@@ -52,9 +52,10 @@ import { stat } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { CommandDecode } from './command.ts'
-import { decodeDecision } from './command.ts'
+import { messageOf } from './message.ts'
+import { decodeOutcomeValue } from './command.ts'
 import { contextMessage } from './context.ts'
-import type { HookDecision, HookEvent } from './hook.ts'
+import type { HookEvent, HookOutcome } from './hook.ts'
 
 /** The shell surface a module's `exec` helper needs; absent when the deployment has none. */
 export type ModuleShell = Pick<ShellExecutor, 'resolve' | 'execute'> | undefined
@@ -174,7 +175,7 @@ export interface ModuleRunOptions {
 /** What one module run produced. */
 export interface ModuleResult {
   /** The outcome the module returned, validated like a command's stdout. */
-  readonly decision: HookDecision | undefined
+  readonly outcome: HookOutcome | undefined
   /** Why the run failed, or `undefined` when it settled cleanly. */
   readonly error: string | undefined
 }
@@ -197,14 +198,14 @@ export function resolveModulePath(source: string, path: string): string {
  * a failed {@link ModuleResult}, which the dispatcher records and applies the
  * entry's `onFailure` policy to.
  * @param options - the module, its input, and its execution facts.
- * @returns the run's decision and failure detail.
+ * @returns the run's outcome and failure detail.
  */
 export async function runModule(options: ModuleRunOptions): Promise<ModuleResult> {
   let version: number
   try {
     version = (await stat(options.file)).mtimeMs
   } catch (error) {
-    return { decision: undefined, error: `the module could not be read: ${messageOf(error)}` }
+    return { outcome: undefined, error: `the module could not be read: ${messageOf(error)}` }
   }
 
   let namespace: { default?: unknown }
@@ -214,11 +215,11 @@ export async function runModule(options: ModuleRunOptions): Promise<ModuleResult
     // for the life of the process.
     namespace = await import(`${pathToFileURL(options.file).href}?v=${String(version)}`) as { default?: unknown }
   } catch (error) {
-    return { decision: undefined, error: `the module could not be imported: ${messageOf(error)}` }
+    return { outcome: undefined, error: `the module could not be imported: ${messageOf(error)}` }
   }
   const factory = namespace.default
   if (typeof factory !== 'function') {
-    return { decision: undefined, error: 'the module must export a default function' }
+    return { outcome: undefined, error: 'the module must export a default function' }
   }
 
   let timeoutTimer: NodeJS.Timeout | undefined
@@ -266,18 +267,18 @@ export async function runModule(options: ModuleRunOptions): Promise<ModuleResult
   timeoutTimer = undefined
 
   if (kind === 'timeout') {
-    return { decision: undefined, error: `timed out after ${String(options.timeoutMs)} ms` }
+    return { outcome: undefined, error: `timed out after ${String(options.timeoutMs)} ms` }
   }
-  if (kind === 'aborted') return { decision: undefined, error: 'was cancelled before it finished' }
+  if (kind === 'aborted') return { outcome: undefined, error: 'was cancelled before it finished' }
   // The module returned before the timeout; helpers are closed from here on so
   // a detached continuation cannot act after its run was recorded.
   const outcome = settled as { readonly value?: unknown; readonly thrown?: unknown }
-  if ('thrown' in outcome) return { decision: undefined, error: messageOf(outcome.thrown) }
+  if ('thrown' in outcome) return { outcome: undefined, error: messageOf(outcome.thrown) }
   if (outcome.value === undefined || outcome.value === null) {
-    return { decision: undefined, error: undefined }
+    return { outcome: undefined, error: undefined }
   }
-  const decoded: CommandDecode = decodeDecision(outcome.value, 'module result')
-  return { decision: decoded.decision, error: decoded.error }
+  const decoded: CommandDecode = decodeOutcomeValue(outcome.value, 'module result')
+  return { outcome: decoded.outcome, error: decoded.error }
 }
 
 /**
@@ -366,13 +367,4 @@ function disabled(stderr: string): ModuleExecResult {
  */
 function failedExec(stderr: string): ModuleExecResult {
   return { exitCode: null, stdout: '', stderr, timedOut: false, aborted: false, disabled: false }
-}
-
-/**
- * Render one caught value for a failure message.
- * @param error - anything thrown.
- * @returns a single-line description.
- */
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }

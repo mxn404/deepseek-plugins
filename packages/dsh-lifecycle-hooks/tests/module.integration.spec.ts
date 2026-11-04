@@ -96,7 +96,7 @@ export default (ctx) => ({
 
     await runTurn(agent)
 
-    // A module's outcome is validated by the same `decodeDecision` a command's
+    // A module's outcome is validated by the same `decodeOutcomeValue` a command's
     // stdout is, so `ask` is legal here too: the host runs its own approval
     // flow, and the tool runs only because the answerer allowed it once.
     expect(harness.approvalRequests).toHaveLength(1)
@@ -427,6 +427,69 @@ export default (ctx) => ({
       handler: 'module',
       action: 'block',
     })
+  })
+
+  it('carries the meta a module returns into the audit record', async () => {
+    const root = await fixture.repo()
+    await writeHookModule(root, '.dsh/hooks/meta.mjs', `
+export default () => ({
+  action: 'deny',
+  reason: 'module blocked with metadata',
+  meta: { rule: 'no-read', severity: 3 },
+})
+`)
+    await writeHooks(root, [
+      moduleHook('meta', 'hooks/meta.mjs', { match: { tool: 'read' } }),
+    ])
+    const harness = await fixture.harness(root)
+    const adapter = harness.registerAdapter('mock', [
+      toolCallResponse('read-1', 'read', { file_path: 'note.txt' }),
+      textResponse('done'),
+    ])
+    const agent = await harness.createAgent('mock')
+
+    await runTurn(agent)
+
+    expect(requestText(adapter.requests[1]!)).toContain('module blocked with metadata')
+    expect(hookRunRecords(agent.session)[0]).toMatchObject({
+      event: 'tool.pre',
+      hook_id: 'meta',
+      handler: 'module',
+      action: 'deny',
+      meta: { rule: 'no-read', severity: 3 },
+    })
+  })
+
+  it('fails the run when a module returns a non-JSON meta object', async () => {
+    const root = await fixture.repo()
+    await writeHookModule(root, '.dsh/hooks/meta.mjs', `
+export default () => ({
+  action: 'deny',
+  reason: 'this never applies',
+  meta: { took: new Date() },
+})
+`)
+    await writeHooks(root, [
+      moduleHook('meta', 'hooks/meta.mjs', { match: { tool: 'read' } }),
+    ])
+    const harness = await fixture.harness(root)
+    const adapter = harness.registerAdapter('mock', [
+      toolCallResponse('read-1', 'read', { file_path: 'note.txt' }),
+      textResponse('done'),
+    ])
+    const agent = await harness.createAgent('mock')
+
+    await runTurn(agent)
+
+    // A bad meta is a protocol failure, not a silently dropped field: the run
+    // fails open (the tool ran) and the failure is audited.
+    expect(requestText(adapter.requests[1]!)).toBeTruthy()
+    const [record] = hookRunRecords(agent.session)
+    expect(record).toMatchObject({ event: 'tool.pre', hook_id: 'meta', handler: 'module' })
+    expect(record!.action).toBeUndefined()
+    expect(record!.error).toContain('"meta" must be a JSON object')
+    expect(harness.pluginWarnings.some(warning => warning.includes('meta') && warning.includes('failed')))
+      .toBe(true)
   })
 
   it('runs a detached module without deciding the event, and still audits it', async () => {

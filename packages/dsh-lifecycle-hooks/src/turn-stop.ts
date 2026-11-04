@@ -5,12 +5,12 @@
  * ignores. The only way to continue the turn is to put a message into the
  * next-step inbox before the serial dispatch settles, so the plan steers the
  * agent with the merged continue text. Every hook's continue merges into
- * exactly one steer message: {@link mergeDecisions} joins their reasons and
+ * exactly one steer message: {@link mergeOutcomes} joins their reasons and
  * contexts, and the plan steers once.
  *
  * `continue` is the only action this event supports. A `halt`, `deny`, `ask`,
  * or `block` reported by a command hook is warned about and ignored by
- * {@link allowedDecisions}; a builtin naming one is skipped at load time.
+ * {@link allowedOutcomes}; a builtin naming one is skipped at load time.
  *
  * Because a hook that always continues would keep the turn alive forever, every
  * grant counts against `maxStopContinues`. The count is per Agent and turn: a
@@ -25,10 +25,8 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { contextMessage } from './context.ts'
 import type { DispatchPlan } from './dispatch.ts'
 import { EVENT_ACTIONS } from './hook.ts'
-import type { MergedDecision } from './outcome.ts'
-
-/** Line the model reads when a continue hook gave neither a reason nor context. */
-const FALLBACK_CONTINUE = 'continue: a turn.stop hook asked the agent to keep going'
+import { FALLBACK_CONTINUE } from './reasons.ts'
+import type { MergedOutcome } from './outcome.ts'
 
 /**
  * Consecutive continues granted per Agent, keyed by turn.
@@ -99,8 +97,8 @@ export function turnStopPlan(agent: Agent, options: TurnStopOptions): DispatchPl
         continued_count: options.continuedCount,
       },
     },
-    apply(decision: MergedDecision): void {
-      if (decision.action !== 'continue') return
+    apply(outcome: MergedOutcome): void {
+      if (outcome.action !== 'continue') return
       const already = options.continues.of(agent, options.turn)
       if (already >= options.maxStopContinues) {
         options.warn(
@@ -111,8 +109,8 @@ export function turnStopPlan(agent: Agent, options: TurnStopOptions): DispatchPl
       }
       options.continues.grant(agent, options.turn)
       const lines = [
-        ...decision.reason === undefined ? [] : [decision.reason],
-        ...decision.context,
+        ...outcome.reason === undefined ? [] : [outcome.reason],
+        ...outcome.context,
       ]
       // Steer, not inject: the loop re-reads the next-step inbox when the
       // serial dispatch settles, and only a message already there keeps the

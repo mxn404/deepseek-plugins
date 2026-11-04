@@ -15,7 +15,7 @@
  * - `halt` cancels the turn with the host's own `{kind:'hook'}` cause. Nothing
  *   runs after it.
  *
- * A deny outranks context: the merged decision carries both, and the applier
+ * A deny outranks context: the merged outcome carries both, and the applier
  * rejects the step, so a context line never reaches a model request from a
  * denied step.
  *
@@ -27,10 +27,7 @@ import type { UserMessage } from '@deepseek-ai/dsh-session'
 import { contextMessage } from './context.ts'
 import type { DispatchPlan } from './dispatch.ts'
 import { EVENT_ACTIONS } from './hook.ts'
-import type { MergedDecision } from './outcome.ts'
-
-/** Reason used when a hook halted the turn without naming one. */
-const FALLBACK_HALT = 'halted by a lifecycle hook'
+import type { MergedOutcome } from './outcome.ts'
 
 /**
  * Extract the user prompt a step's claimed batch carries.
@@ -74,18 +71,18 @@ export function stepStartPlan(
       match: { kind: 'prompt', prompt },
       fields: { prompt, message_count: messages.length },
     },
-    async apply(decision: MergedDecision): Promise<PreStepDecision | undefined> {
-      if (decision.action === 'halt') {
-        agent.cancel({ kind: 'hook', reason: decision.reason ?? FALLBACK_HALT })
+    async apply(outcome: MergedOutcome): Promise<PreStepDecision | undefined> {
+      if (outcome.action === 'halt') {
+        agent.cancel({ kind: 'hook', reason: outcome.reason })
         return { kind: 'reject' }
       }
       // Deny wins over context: the step is rejected, so no model request is
       // built from it and the context lines have nowhere to land.
-      if (decision.action === 'deny') return { kind: 'reject' }
-      if (decision.context.length === 0) return undefined
+      if (outcome.action === 'deny') return { kind: 'reject' }
+      if (outcome.context.length === 0) return undefined
       const downstream = await next()
       if (downstream.kind !== 'enter') return downstream
-      return { ...downstream, messages: [...downstream.messages, contextMessage(decision.context)] }
+      return { ...downstream, messages: [...downstream.messages, contextMessage(outcome.context)] }
     },
   }
 }

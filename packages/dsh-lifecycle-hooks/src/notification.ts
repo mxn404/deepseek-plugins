@@ -18,6 +18,7 @@
  */
 
 import type { DispatchPlan } from './dispatch.ts'
+import { messageOf } from './message.ts'
 import { EVENT_ACTIONS } from './hook.ts'
 
 /** What produced a notification. */
@@ -66,7 +67,7 @@ export function approvalNotification(
  * @returns the notification payload, without a tool name.
  */
 export function errorNotification(error: unknown): NotificationPayload {
-  return { type: 'error', message: messageOf(error) }
+  return { type: 'error', message: notificationMessage(error) }
 }
 
 /**
@@ -88,11 +89,6 @@ export function notificationPlan(payload: NotificationPayload): DispatchPlan<und
         ...payload.tool_name === undefined ? {} : { tool_name: payload.tool_name },
       },
     },
-    // No run can contribute a decision at an observe-only event; this applier
-    // exists only to satisfy the plan shape and never reaches the host.
-    apply(): undefined {
-      return undefined
-    },
   }
 }
 
@@ -101,12 +97,7 @@ export function notificationPlan(payload: NotificationPayload): DispatchPlan<und
  * @param error - anything thrown or reported.
  * @returns a single-line description, never empty.
  */
-function messageOf(error: unknown): string {
-  if (error instanceof Error) return error.message.length > 0 ? error.message : error.name
-  if (typeof error === 'object' && error !== null && 'message' in error) {
-    const message = (error as { message?: unknown }).message
-    if (typeof message === 'string' && message.length > 0) return message
-  }
-  const text = String(error)
+function notificationMessage(error: unknown): string {
+  const text = messageOf(error)
   return text.length > 0 ? text : 'the agent reported an error'
 }

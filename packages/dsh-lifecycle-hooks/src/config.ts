@@ -31,7 +31,7 @@ export interface Config {
    */
   localHooks: boolean
   /**
-   * Maximum number of consecutive `continue` decisions a single turn may grant
+   * Maximum number of consecutive `continue` outcomes a single turn may grant
    * at `turn.stop`. The guard exists because a stop hook that always continues
    * would otherwise keep the turn alive forever.
    */

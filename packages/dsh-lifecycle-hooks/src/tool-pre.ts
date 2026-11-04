@@ -23,16 +23,7 @@ import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
 import { contextMessage } from './context.ts'
 import type { DispatchPlan } from './dispatch.ts'
 import { EVENT_ACTIONS } from './hook.ts'
-import type { MergedDecision } from './outcome.ts'
-
-/** Reason used when a hook blocked the call without naming one. */
-const FALLBACK_DENY = 'denied by a lifecycle hook'
-
-/** Reason used when a hook asked for confirmation without naming one. */
-const FALLBACK_ASK = 'a lifecycle hook asked for confirmation'
-
-/** Reason used when a hook halted the turn without naming one. */
-const FALLBACK_HALT = 'halted by a lifecycle hook'
+import type { MergedOutcome } from './outcome.ts'
 
 /**
  * Build the `tool.pre` plan for one call.
@@ -50,19 +41,18 @@ export function toolPrePlan(exec: ToolExecution, agent: Agent): DispatchPlan<Pre
         tool: { name: exec.name, call_id: exec.callId, input: exec.arguments },
       },
     },
-    apply(decision: MergedDecision): PreToolDecision | undefined {
-      if (decision.action === 'halt') {
-        const reason = decision.reason ?? FALLBACK_HALT
-        agent.cancel({ kind: 'hook', reason })
-        return { kind: 'deny', reason }
+    apply(outcome: MergedOutcome): PreToolDecision | undefined {
+      if (outcome.action === 'halt') {
+        agent.cancel({ kind: 'hook', reason: outcome.reason })
+        return { kind: 'deny', reason: outcome.reason }
       }
-      if (decision.context.length > 0) agent.inject(contextMessage(decision.context))
-      if (decision.action === 'deny') return { kind: 'deny', reason: decision.reason ?? FALLBACK_DENY }
-      if (decision.action === 'ask') {
+      if (outcome.context.length > 0) agent.inject(contextMessage(outcome.context))
+      if (outcome.action === 'deny') return { kind: 'deny', reason: outcome.reason }
+      if (outcome.action === 'ask') {
         return {
           kind: 'ask',
-          reason: decision.reason ?? FALLBACK_ASK,
-          ...decision.displayReason === undefined ? {} : { displayReason: decision.displayReason },
+          reason: outcome.reason,
+          ...outcome.displayReason === undefined ? {} : { displayReason: outcome.displayReason },
         }
       }
       return undefined

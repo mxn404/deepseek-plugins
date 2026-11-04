@@ -16,7 +16,8 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { ShellExecutor } from '@deepseek-ai/dsh-shell'
 import type { CommandResult } from './command.ts'
 import { runCommand } from './command.ts'
-import type { BuiltinRun, Hook, HookDecision, HookEvent, HookHandlerKind } from './hook.ts'
+import type { BuiltinRun, Hook, HookEvent, HookHandlerKind, HookOutcome } from './hook.ts'
+import { messageOf } from './message.ts'
 import { resolveModulePath, runModule } from './module.ts'
 
 /** The shell surface a command run needs; absent when the deployment has none. */
@@ -40,7 +41,7 @@ export interface HookEnvironment {
   readonly log: (message: string) => void
 }
 
-/** What one executed hook did, for the decision merge and the audit row. */
+/** What one executed hook did, for the outcome merge and the audit row. */
 export interface HookRun {
   readonly hook: Hook
   /** Absolute path of the hooks file the hook came from. */
@@ -48,13 +49,13 @@ export interface HookRun {
   readonly event: HookEvent
   readonly handler: HookHandlerKind
   /**
-   * Its decision, or `undefined` when it only observed or failed. A failed run
+   * Its outcome, or `undefined` when it only observed or failed. A failed run
    * is left without one by {@link executeHook}; the dispatcher's
-   * `onFailure: "block"` synthesis is the only decision that accompanies an
+   * `onFailure: "block"` synthesis is the only outcome that accompanies an
    * `error`.
    */
-  readonly decision: HookDecision | undefined
-  /** Failure detail when the handler threw or its process failed; a failed run contributes no decision. */
+  readonly outcome: HookOutcome | undefined
+  /** Failure detail when the handler threw or its process failed; a failed run contributes no outcome. */
   readonly error: string | undefined
   /** Wall-clock milliseconds this run took. */
   readonly durationMs: number
@@ -63,7 +64,7 @@ export interface HookRun {
 }
 
 /**
- * The decision one `builtin` run contributes.
+ * The outcome one `builtin` run contributes.
  *
  * A blocking action carries the reason the loader already defaulted;
  * `context` and `inject` carry their reminder line, but only `context` keeps
@@ -76,7 +77,7 @@ export interface HookRun {
  * @param run - the validated builtin run.
  * @returns its contribution to the event's merge.
  */
-function builtinDecision(run: BuiltinRun): HookDecision {
+function builtinOutcome(run: BuiltinRun): HookOutcome {
   switch (run.action) {
     case 'deny':
     case 'ask':
@@ -118,7 +119,7 @@ export async function executeHook(
         source,
         event: hook.on,
         handler: run.type,
-        decision: builtinDecision(run),
+        outcome: builtinOutcome(run),
         error: undefined,
         durationMs: Math.round(performance.now() - started),
         exitCode: undefined,
@@ -141,7 +142,7 @@ export async function executeHook(
         source,
         event: hook.on,
         handler: run.type,
-        decision: result.decision,
+        outcome: result.outcome,
         error: result.error,
         durationMs: Math.round(performance.now() - started),
         exitCode: undefined,
@@ -161,7 +162,7 @@ export async function executeHook(
       source,
       event: hook.on,
       handler: run.type,
-      decision: result.decision,
+      outcome: result.outcome,
       error: result.error,
       durationMs: Math.round(performance.now() - started),
       exitCode: result.exitCode,
@@ -172,8 +173,8 @@ export async function executeHook(
       source,
       event: hook.on,
       handler: run.type,
-      decision: undefined,
-      error: error instanceof Error ? error.message : String(error),
+      outcome: undefined,
+      error: messageOf(error),
       durationMs: Math.round(performance.now() - started),
       exitCode: undefined,
     }
