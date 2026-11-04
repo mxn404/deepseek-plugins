@@ -96,7 +96,7 @@ export default (ctx) => ({
 
     await runTurn(agent)
 
-    // A module's outcome is validated by the same `decodeDecision` a command's
+    // A module's outcome is validated by the same `decodeOutcomeValue` a command's
     // stdout is, so `ask` is legal here too: the host runs its own approval
     // flow, and the tool runs only because the answerer allowed it once.
     expect(harness.approvalRequests).toHaveLength(1)

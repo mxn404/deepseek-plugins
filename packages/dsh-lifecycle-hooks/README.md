@@ -224,8 +224,8 @@ overlay 里这一行的 `name` 要写成插件包的绝对路径，否则从仓�
 
 **阻塞与只观察的差别**：`session.start` / `step.start` / `tool.pre` / `tool.post` 能改变
 宿主接下来的行为；`turn.stop` 只决定本轮是否再走一步；`tool.result` / `session.end` /
-`notification` 只能记录和通知——在它们上面返回 outcome 不会生效，插件 warn 一句并保留
-它带的 context。
+`notification` 只能记录和通知——在它们上面返回 outcome 不会生效，插件 warn 一句；只观察
+事件没有合并阶段，所以它带的 context 也不会送达。
 
 ## Handler
 
@@ -371,7 +371,8 @@ export default async (ctx) => {
    （context 无处落地），任何事件的 `halt` 也不注入 context。
 7. `meta` —— 不参与优先级；各 run 的审计文档按配置顺序最后一个生效，只写进合并结果与审计记录。
 
-事件不支持的 action 会 warn 一句并忽略，但保留它带的 context。同一事件点的全部 context
+事件不支持的 action 会 warn 一句并忽略，但保留它带的 context（只观察事件没有合并阶段，
+整份 outcome 只会 warn）。同一事件点的全部 context
 拼成**一条** user 消息，包成 `<system-reminder>`，message source 标
 `dsh-lifecycle-hooks`（`src/context.ts` 是唯一的 message 形状与 source 声明）。送达方式：
 `session.start` / `tool.pre` 用 `agent.inject`，`step.start` 折进 `enter.messages`，
