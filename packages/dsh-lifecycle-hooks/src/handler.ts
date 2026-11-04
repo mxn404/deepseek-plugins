@@ -79,7 +79,12 @@ export async function executeHook(
         source,
         event: hook.on,
         handler: run.type,
-        decision: { action: run.action, reason: run.reason },
+        decision: {
+        action: run.action,
+        // A builtin may carry no reason (`continue` does); an explicit
+        // `undefined` is not lossless JSON for the audit row, so omit it.
+        ...run.reason === undefined ? {} : { reason: run.reason },
+      },
         error: undefined,
         durationMs: Math.round(performance.now() - started),
         exitCode: undefined,

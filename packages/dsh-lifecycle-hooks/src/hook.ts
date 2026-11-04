@@ -14,7 +14,7 @@ import type { HookMatch } from './match.ts'
 
 /**
  * Lifecycle points the `.dsh/hooks.json` vocabulary names. This build
- * dispatches `tool.pre` only.
+ * dispatches `tool.pre` and `turn.stop`.
  */
 export type HookEvent =
   | 'session.start'
@@ -29,7 +29,7 @@ export type HookEvent =
 /** Handler kinds the `.dsh/hooks.json` vocabulary names. */
 export type HookHandlerKind = 'builtin' | 'command' | 'module'
 
-/** Actions the `.dsh/hooks.json` vocabulary names. This build executes `deny`, `context`, and `halt`. */
+/** Actions the `.dsh/hooks.json` vocabulary names. This build executes `deny`, `context`, `halt`, and `continue`. */
 export type HookAction = 'deny' | 'ask' | 'block' | 'continue' | 'halt' | 'context' | 'inject'
 
 /**
@@ -44,6 +44,18 @@ export interface BuiltinDenyRun {
   readonly action: 'deny'
   /** Model-facing reason; never empty. */
   readonly reason: string
+}
+
+/**
+ * A builtin `continue`: ask a `turn.stop` to keep going. The reason is folded
+ * into the one steer message the model reads; without one the plugin supplies
+ * its own fallback line.
+ */
+export interface BuiltinContinueRun {
+  readonly type: 'builtin'
+  readonly action: 'continue'
+  /** Model-facing reason, or `undefined` to use the plugin's fallback line. */
+  readonly reason?: string
 }
 
 /**
@@ -64,7 +76,7 @@ export interface CommandRun {
 }
 
 /** What a matching hook does, discriminated by its handler kind. */
-export type HookHandler = BuiltinDenyRun | CommandRun
+export type HookHandler = BuiltinDenyRun | BuiltinContinueRun | CommandRun
 
 /** One hook run's contribution to its event's decision. */
 export interface HookDecision {
