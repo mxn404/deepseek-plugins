@@ -32,3 +32,34 @@ _Avoid_: 加载、挂载、读取
 **Trigger**（触发）:
 agent 的一次工具调用**成功**碰到了某个文件——读、写、编辑它，或在 shell 里对单个文件使用只读命令。
 _Avoid_: 命中、访问、触碰事件
+
+## 生命周期钩子（lifecycle hooks）
+
+**Hook point**（钩子点）:
+一条 hook 绑定到的 dsh 生命周期事件名，例如 `tool.pre` 或 `turn.stop`；它决定这条 hook 在
+宿主的哪个 seam 上运行、能产出哪些 outcome。
+_Avoid_: 事件、阶段、时机
+
+**Handler**（处理器）:
+hook 命中后实际执行的东西：一行 `builtin` 动作、一条 `command` 子进程，或一个进程内
+`module`。同一钩子点可以挂任意种 handler。
+_Avoid_: 动作、脚本、回调
+
+**Outcome**（结果）:
+handler 交回给插件的一份决策文档——`action`、`reason`、`context`、`replace`——同一事件点
+的 outcome 按固定优先级合并后，才交给宿主 seam 应用。
+_Avoid_: 返回值、decision、结果对象
+
+**Source**（来源）:
+一条 hook 来自哪个 hooks 文件的绝对路径。它决定审计记录里的 `source`，也是 `module` 路径
+的解析基准。
+_Avoid_: 配置文件、层
+
+**Hook file**（钩子文件）:
+承载 hook 声明的 JSON 文件：用户级 `hooks.json`、项目级 `.dsh/hooks.json`，或同目录的
+`.dsh/hooks.local.json`。
+_Avoid_: 规则文件、配置文件、hooks 配置
+
+**Layer**（层）:
+一个 hook 文件所属的来源类别——`user`、`project` 或 `local`。三层全部叠加，不做覆盖。
+_Avoid_: 来源、优先级、文件
