@@ -16,6 +16,7 @@
  */
 
 import { readFile, stat } from 'node:fs/promises'
+import { extname } from 'node:path'
 import type { DispatchedHookEvent, Hook, HookAction, HookEvent } from './hook.ts'
 import { EVENT_ACTIONS } from './hook.ts'
 import { compileToolPattern, invalidArgPattern, isRecord, type HookMatch } from './match.ts'
@@ -274,7 +275,7 @@ function parseRun(raw: unknown, event: DispatchedHookEvent): RunParse {
     case 'command':
       return parseCommandRun(raw)
     case 'module':
-      return { error: 'handler type "module" is not supported by this build' }
+      return parseModuleRun(raw)
     default:
       return { error: `unknown handler type "${raw.type}"` }
   }
@@ -351,6 +352,34 @@ function parseCommandRun(raw: Record<string, unknown>): RunParse {
     return { error: '"run.async" must be a boolean' }
   }
   return { run: { type: 'command', command: raw.command, async: raw.async === true } }
+}
+
+/**
+ * Parse a `module` run: the in-process ESM module and its detachment flag.
+ *
+ * The path is validated, not resolved: it is relative to the hooks file that
+ * names it, and parsing does not know which file that was. Only `.mjs` and
+ * `.js` are accepted — a `.ts` file would need a loader this build does not
+ * carry, and silently importing it as JavaScript would fail at run time with a
+ * much worse message.
+ * @param raw - the entry's `run` value, known to be an object.
+ * @returns the executable run, or the reason the entry must be dropped.
+ */
+function parseModuleRun(raw: Record<string, unknown>): RunParse {
+  if (typeof raw.path !== 'string' || raw.path.trim().length === 0) {
+    return { error: '"run.path" must be a non-empty string' }
+  }
+  const extension = extname(raw.path)
+  if (extension !== '.mjs' && extension !== '.js') {
+    return {
+      error: '"run.path" must be a .mjs or .js module'
+        + ' (TypeScript modules are not supported by this build)',
+    }
+  }
+  if (raw.async !== undefined && typeof raw.async !== 'boolean') {
+    return { error: '"run.async" must be a boolean' }
+  }
+  return { run: { type: 'module', path: raw.path, async: raw.async === true } }
 }
 
 /**

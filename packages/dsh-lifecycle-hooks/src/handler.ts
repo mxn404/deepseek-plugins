@@ -6,15 +6,18 @@
  * hook becomes a recorded `error` instead of an exception thrown into the host
  * pipeline. A `builtin` action settles synchronously, so the timeout an entry
  * declares cannot be reached there; a `command` run hands it to `ctx.shell`,
- * which kills the process group at expiry.
+ * which kills the process group at expiry; a `module` run races its own promise
+ * against it and disables the module's helpers afterwards (`module.ts`).
  *
  * @module dsh-lifecycle-hooks/handler
  */
 
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { ShellExecutor } from '@deepseek-ai/dsh-shell'
 import type { CommandResult } from './command.ts'
 import { runCommand } from './command.ts'
 import type { BuiltinRun, Hook, HookDecision, HookEvent, HookHandlerKind } from './hook.ts'
+import { resolveModulePath, runModule } from './module.ts'
 
 /** The shell surface a command run needs; absent when the deployment has none. */
 export type HandlerShell = Pick<ShellExecutor, 'resolve' | 'execute'> | undefined
@@ -23,14 +26,18 @@ export type HandlerShell = Pick<ShellExecutor, 'resolve' | 'execute'> | undefine
 export interface HookEnvironment {
   /** The host shell service, read through `ctx.get('shell')`. */
   readonly shell: HandlerShell
-  /** Event payload serialized onto a command's stdin. */
-  readonly payload: unknown
+  /** The agent the event belongs to; a module handler may act on it directly. */
+  readonly agent: Agent
+  /** Event payload serialized onto a command's stdin and handed to a module. */
+  readonly payload: Record<string, unknown>
   /** `DSH_HOOK_*` facts handed to a command. */
   readonly env: Record<string, string>
   /** Session working directory a command runs in. */
   readonly workdir: string
   /** Cancels the run when the event it belongs to is abandoned. */
   readonly signal: AbortSignal
+  /** Logger sink a module's `log` helper writes through. */
+  readonly log: (message: string) => void
 }
 
 /** What one executed hook did, for the decision merge and the audit row. */
@@ -112,6 +119,29 @@ export async function executeHook(
         handler: run.type,
         decision: builtinDecision(run),
         error: undefined,
+        durationMs: Math.round(performance.now() - started),
+        exitCode: undefined,
+      }
+    }
+    if (run.type === 'module') {
+      const result = await runModule({
+        file: resolveModulePath(source, run.path),
+        timeoutMs: hook.timeoutMs,
+        signal: environment.signal,
+        payload: environment.payload,
+        handler: { id: hook.id, event: hook.on, source },
+        agent: environment.agent,
+        workdir: environment.workdir,
+        shell: environment.shell,
+        log: environment.log,
+      })
+      return {
+        hook,
+        source,
+        event: hook.on,
+        handler: run.type,
+        decision: result.decision,
+        error: result.error,
         durationMs: Math.round(performance.now() - started),
         exitCode: undefined,
       }

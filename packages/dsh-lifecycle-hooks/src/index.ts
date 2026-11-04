@@ -10,11 +10,11 @@
  * `tool.pre` (deny the call, add context for the next request, or halt),
  * `tool.post` (block, replace, or context after the tool ran), and `turn.stop`
  * (steer a stopping turn on for one more step), each through the same merge of
- * `builtin` and `command` outcomes.
+ * `builtin`, `command`, and `module` outcomes.
  *
  * The wiring here is deliberately thin. Discovery lives in `discovery.ts`,
  * reading and validating one hooks file in `hooks-file.ts`, matching in
- * `match.ts`, execution in `handler.ts` / `command.ts`, the per-event payload in
+ * `match.ts`, execution in `handler.ts` / `command.ts` / `module.ts`, the per-event payload in
  * `payload.ts`, the single resolve→run→record→merge→apply pipeline in
  * `dispatch.ts`, the decision ranking in `outcome.ts`, the events' plans in
  * `session-start.ts` / `step-start.ts` / `tool-pre.ts` / `tool-post.ts` /
@@ -55,6 +55,14 @@ export const inject = ['workingDirectory']
 
 export { Config }
 export type { Config as HooksConfig }
+// The curated surface a hook module receives, published for authors who write
+// their `.mjs` module in TypeScript before compiling it.
+export type {
+  ModuleContext,
+  ModuleExecOptions,
+  ModuleExecResult,
+  ModuleHandlerInfo,
+} from './module.ts'
 
 /**
  * Mount the host half.
@@ -64,6 +72,12 @@ export type { Config as HooksConfig }
 export function apply(ctx: Context, config: Config): void {
   const warn = (message: string): void => {
     ctx.logger.warn(`dsh-lifecycle-hooks: ${message}`)
+  }
+
+  // A module handler's `log` helper writes here, under the same name prefix:
+  // the hook author's line is attributable and never model-visible.
+  const log = (message: string): void => {
+    ctx.logger.info(`dsh-lifecycle-hooks: ${message}`)
   }
 
   const resolver = new HookResolver({
@@ -138,6 +152,7 @@ export function apply(ctx: Context, config: Config): void {
     detached,
     audit: config.audit,
     warn,
+    log,
     onResolve: (session, directories) => {
       // Keep the watcher aligned with the committed cwd even when no hooks
       // exist yet: a layer created mid-session must become visible on the next
@@ -164,6 +179,7 @@ export function apply(ctx: Context, config: Config): void {
       session: agent.session,
       cwd: ctx.workingDirectory.get(agent.session),
       agentId: agent.id,
+      agent,
       turn: ctx.get('sessionProjections')?.stateOf(agent.session, 'turnBoundary')?.lastTurn ?? 0,
       step: steps.of(agent.session),
       signal: exec.signal,
@@ -183,6 +199,7 @@ export function apply(ctx: Context, config: Config): void {
         session: agent.session,
         cwd: ctx.workingDirectory.get(agent.session),
         agentId: agent.id,
+        agent,
         // No turn exists yet: the event fires before the agent is handed back.
         turn: 0,
         step: 0,
@@ -203,6 +220,7 @@ export function apply(ctx: Context, config: Config): void {
         session: agent.session,
         cwd: ctx.workingDirectory.get(agent.session),
         agentId: agent.id,
+        agent,
         turn,
         step,
         signal,
@@ -244,6 +262,7 @@ export function apply(ctx: Context, config: Config): void {
         session,
         cwd: ctx.workingDirectory.get(session),
         agentId: agent.id,
+        agent,
         turn,
         step: steps.of(session),
         signal,

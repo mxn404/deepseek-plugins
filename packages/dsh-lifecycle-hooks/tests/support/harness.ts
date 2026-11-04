@@ -40,6 +40,11 @@ export interface HooksHarness {
    * an assertion about plugin noise reads this list.
    */
   readonly pluginWarnings: string[]
+  /**
+   * Every line this plugin logged at info level, in order. A module handler's
+   * `log` helper writes here, under the plugin's name prefix.
+   */
+  readonly pluginLogs: string[]
   /** Register one mock model route and return its adapter. */
   registerAdapter(route: string, script: ConstructorParameters<typeof MockAdapter>[0]): MockAdapter
   /** Create a production Agent on one registered route. */
@@ -94,12 +99,18 @@ export async function createHooksHarness(
     warnings.push(message)
     if (message.startsWith(`${DshLifecycleHooks.name}:`)) pluginWarnings.push(message)
   })
+  const pluginLogs: string[] = []
+  vi.spyOn(ctx.logger, 'info').mockImplementation((...args: unknown[]) => {
+    const message = args.map(value => String(value)).join(' ')
+    if (message.startsWith(`${DshLifecycleHooks.name}:`)) pluginLogs.push(message)
+  })
   let sessions = 0
   return {
     ctx,
     dshHome,
     warnings,
     pluginWarnings,
+    pluginLogs,
     registerAdapter(route, script) {
       const adapter = new MockAdapter(script)
       ctx.llm.registerAdapter([route], adapter)
