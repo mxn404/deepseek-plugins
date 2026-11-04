@@ -263,10 +263,15 @@ builtin 动作。
 ```
 
 - **stdin** 是一份 JSON：公共字段 `event`、`time`、`session_id`、`cwd`、`agent_id`、`turn`、
-  `step`、`source`（配置文件绝对路径）、`hook_id`，加上事件自己的字段（`tool`，`tool.post`
-  与 `tool.result` 还有 `result`）。**例外**：`session.start` 的 payload 里 `source` 是会话
-  启动来源（`startup` / `resume` / `clear` / `compact`），会覆盖文件路径这个键；要拿配置
-  文件路径请读审计记录的 `source`。其他事件不受影响。
+  `step`、`source`（配置文件绝对路径）、`hook_id`。事件自己的字段：
+  - `session.start`：`source` —— 会话启动来源（`startup` / `resume` / `clear` / `compact`），
+    **覆盖**上面那个文件路径键；要拿配置文件路径请读审计记录的 `source`。
+  - `step.start`：`prompt`（这一步没有用户输入时为 `null`）、`message_count`。
+  - `tool.pre` / `tool.post` / `tool.result`：`tool`（`{ name, call_id, input }`）；
+    后两者还有 `result`（`{ is_error, content }`）。
+  - `turn.stop`：`turn`、`continued_count`（本次 stop 之前该 turn 已授予的连续 continue 数）。
+  - `session.end`：`turn`、可选 `reason`（最后一个关闭 turn 的结束原因）。
+  - `notification`：`type`（`approval` / `error`）、`message`、approval 才有的 `tool_name`。
 - **env** 至少带 `DSH_HOOK_EVENT`、`DSH_HOOK_SESSION_ID`、`DSH_HOOK_CWD`、
   `DSH_HOOK_TURN`、`DSH_HOOK_STEP`、`DSH_HOOK_ID`，与 stdin 的对应字段一致。
 - **stdout** 只认**一个** JSON outcome：
