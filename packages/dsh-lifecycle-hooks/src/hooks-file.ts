@@ -70,21 +70,20 @@ const MATCH_DIMENSIONS: Readonly<Record<DispatchedHookEvent, 'none' | 'tool' | '
  * Builtin actions each dispatched event accepts.
  *
  * The builtin vocabulary is the spec's `{action, reason?, text?}`: a blocking
- * action carries a reason, `context` and `inject` one reminder line, and
- * `replace` the model-visible text of a tool result. `EVENT_ACTIONS` is the
- * command-handler authority (filtered at dispatch time); this table is the
- * load-time gate, and it is narrower: `tool.pre` accepts only the blocking
- * builtins a call can be stopped by before it runs, `deny` and `ask`, while
- * context and halt there remain command-handler (or later) territory. The
- * three observe-only events accept no builtin action at all: they have no
- * decision to apply, so an entry naming one is skipped with a warning instead
- * of running a no-op.
+ * action carries a reason, `context` and `inject` one reminder line (they are
+ * the same outcome; `inject` is the legacy builtin spelling), and `replace`
+ * the model-visible text of a tool result. `EVENT_ACTIONS` is the dispatch
+ * authority every handler kind is filtered against at apply time; this table is
+ * the builtin-specific load gate, and it is narrower only where a builtin would
+ * be a no-op: an observe-only event has no outcome to apply, so an entry naming
+ * one is skipped with a warning instead of running a builtin that does nothing.
+ * Every other event accepts the builtin form of each action its plan applies.
  */
 const BUILTIN_ACTIONS: Readonly<Record<DispatchedHookEvent, readonly HookAction[]>> = {
-  'session.start': ['context'],
-  'step.start': ['deny', 'context', 'halt'],
-  'tool.pre': ['deny', 'ask'],
-  'tool.post': ['block', 'replace', 'inject'],
+  'session.start': ['context', 'inject'],
+  'step.start': ['deny', 'context', 'inject', 'halt'],
+  'tool.pre': ['deny', 'ask', 'context', 'inject', 'halt'],
+  'tool.post': ['block', 'replace', 'context', 'inject', 'halt'],
   'tool.result': [],
   'turn.stop': ['continue'],
   'session.end': [],

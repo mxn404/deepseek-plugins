@@ -168,6 +168,73 @@ describe('the hooks file schema', () => {
     expect(parsed.warnings[0]).toContain('step.start')
   })
 
+  it('accepts builtin context, inject, and halt where the event applies them', () => {
+    const parsed = hooksOf(JSON.stringify({
+      version: 1,
+      hooks: [
+        { id: 'pre-note', on: 'tool.pre', run: { type: 'builtin', action: 'inject', text: 'pre note' } },
+        { id: 'pre-context', on: 'tool.pre', run: { type: 'builtin', action: 'context', text: 'pre context' } },
+        { id: 'pre-halt', on: 'tool.pre', run: { type: 'builtin', action: 'halt' } },
+        { id: 'post-context', on: 'tool.post', run: { type: 'builtin', action: 'context', text: 'post context' } },
+        {
+          id: 'post-halt',
+          on: 'tool.post',
+          run: { type: 'builtin', action: 'halt', reason: 'stop after this result' },
+        },
+        { id: 'start-inject', on: 'session.start', run: { type: 'builtin', action: 'inject', text: 'start note' } },
+        { id: 'step-inject', on: 'step.start', run: { type: 'builtin', action: 'inject', text: 'step note' } },
+      ],
+    }))
+    expect(parsed.warnings).toEqual([])
+    expect(parsed.hooks.map(hook => [hook.on, hook.run])).toEqual([
+      ['tool.pre', { type: 'builtin', action: 'inject', text: 'pre note' }],
+      ['tool.pre', { type: 'builtin', action: 'context', text: 'pre context' }],
+      ['tool.pre', { type: 'builtin', action: 'halt', reason: 'halted by a lifecycle hook' }],
+      ['tool.post', { type: 'builtin', action: 'context', text: 'post context' }],
+      ['tool.post', { type: 'builtin', action: 'halt', reason: 'stop after this result' }],
+      ['session.start', { type: 'builtin', action: 'inject', text: 'start note' }],
+      ['step.start', { type: 'builtin', action: 'inject', text: 'step note' }],
+    ])
+  })
+
+  it.each([
+    [
+      'context at turn.stop',
+      { id: 'a', on: 'turn.stop', run: { type: 'builtin', action: 'context', text: 'no' } },
+      'not supported by this build on turn.stop',
+    ],
+    [
+      'inject at turn.stop',
+      { id: 'a', on: 'turn.stop', run: { type: 'builtin', action: 'inject', text: 'no' } },
+      'not supported by this build on turn.stop',
+    ],
+    [
+      'halt at session.start',
+      { id: 'a', on: 'session.start', run: { type: 'builtin', action: 'halt' } },
+      'not supported by this build on session.start',
+    ],
+    [
+      'ask at tool.post',
+      { id: 'a', on: 'tool.post', run: { type: 'builtin', action: 'ask' } },
+      'not supported by this build on tool.post',
+    ],
+    [
+      'context at notification',
+      { id: 'a', on: 'notification', run: { type: 'builtin', action: 'context', text: 'no' } },
+      'only observes',
+    ],
+    [
+      'inject at tool.result',
+      { id: 'a', on: 'tool.result', run: { type: 'builtin', action: 'inject', text: 'no' } },
+      'only observes',
+    ],
+  ])('skips builtin %s', (_label, entry, expected) => {
+    const parsed = hooksOf(JSON.stringify({ version: 1, hooks: [entry] }))
+    expect(parsed.hooks).toEqual([])
+    expect(parsed.warnings).toHaveLength(1)
+    expect(parsed.warnings[0]).toContain(expected)
+  })
+
   it('accepts a command handler on tool.post', () => {
     const parsed = hooksOf(JSON.stringify({
       version: 1,

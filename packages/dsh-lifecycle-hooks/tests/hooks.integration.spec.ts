@@ -23,6 +23,7 @@ import {
   deny,
   hook,
   hookRunRecords,
+  lastSessionEvent,
   runTurn,
   writeFileIn,
   writeHooksFile,
@@ -166,6 +167,47 @@ describe('builtin deny on tool.pre', () => {
     })
     expect(typeof records[0]!.duration_ms).toBe('number')
     expect(records[0]!.error).toBeUndefined()
+  })
+})
+
+describe('builtin halt on tool.pre', () => {
+  it('cancels the turn, denies the call, and stops the hooks behind it', async () => {
+    const root = await fixture.repo()
+    await writeFileIn(root, 'target.txt', 'KEEP-ME\n')
+    await writeHooksFile(root, {
+      version: 1,
+      hooks: [
+        hook({
+          id: 'stop',
+          match: { tool: 'bash' },
+          run: { type: 'builtin', action: 'halt', reason: 'stop this call' },
+        }),
+        hook({
+          id: 'late',
+          match: { tool: 'bash' },
+          run: deny('the late hook must not run'),
+        }),
+      ],
+    })
+    const harness = await fixture.harness(root, {}, { bash: true })
+    const adapter = harness.registerAdapter('mock', [
+      bashToolCall('bash-1', 'touch target.txt'),
+      textResponse('done'),
+    ])
+    const agent = await harness.createAgent('mock')
+
+    await runTurn(agent)
+
+    // The call never ran, the turn ended with the hook cause, and the run
+    // behind the halt was never executed.
+    await expect(access(join(root, 'target.txt'))).resolves.toBeUndefined()
+    expect(lastSessionEvent(agent.session, 'turn/end')?.reason).toEqual({
+      kind: 'aborted',
+      reason: { kind: 'hook', reason: 'stop this call' },
+    })
+    expect(hookRunRecords(agent.session).map(record => record.hook_id)).toEqual(['stop'])
+    expect(hookRunRecords(agent.session)[0]).toMatchObject({ event: 'tool.pre', action: 'halt' })
+    expect(adapter.requests).toHaveLength(1)
   })
 })
 

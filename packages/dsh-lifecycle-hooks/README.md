@@ -236,18 +236,20 @@ builtin 动作。
 
 | 事件 | builtin 可用动作 | 写法 |
 |---|---|---|
-| `session.start` | `context` | `{ "action": "context", "text": "…" }` |
-| `step.start` | `deny` / `context` / `halt` | `{ "action": "deny", "reason": "…" }`（`halt` 可不写 reason） |
-| `tool.pre` | `deny` / `ask` | `{ "action": "deny", "reason": "…" }` / `{ "action": "ask", "reason": "…" }` |
-| `tool.post` | `block` / `replace` / `inject` | `{ "action": "block", "reason": "…" }` / `{ "action": "replace", "text": "…" }` / `{ "action": "inject", "text": "…" }` |
+| `session.start` | `context` / `inject` | `{ "action": "context", "text": "…" }`（`inject` 等价） |
+| `step.start` | `deny` / `context` / `inject` / `halt` | `{ "action": "deny", "reason": "…" }`（`halt` 可不写 reason） |
+| `tool.pre` | `deny` / `ask` / `context` / `inject` / `halt` | `{ "action": "deny", "reason": "…" }` / `{ "action": "ask", "reason": "…" }` / `{ "action": "halt", "reason": "…" }` |
+| `tool.post` | `block` / `replace` / `context` / `inject` / `halt` | `{ "action": "block", "reason": "…" }` / `{ "action": "replace", "text": "…" }` / `{ "action": "halt", "reason": "…" }` |
 | `turn.stop` | `continue` | `{ "action": "continue", "reason": "…" }`（reason 可省） |
 | 三个只观察事件 | 无 | 用 `command` / `module`；写 builtin 会在加载时跳过并 warn |
 
 `reason` 是模型可见的阻断理由，缺省时按动作补一句默认文案；`text` 是 context / inject
 的提醒行，或 replace 的替换文本，必须非空；`continue` 的 `reason` 可省，多个 continue
 的理由会按顺序拼进同一条 steer 消息。`inject` 是 builtin 词汇里「补一句 context」的动作，
-本插件把它折算成 `context` 的一条文本。`tool.pre` 的 builtin 只开放 `deny` 与 `ask`；
-该事件上的 `context` / `halt` 由 command 或 module 提供。
+本插件把它折算成 `context` 的一条文本；两种写法在 `session.start` / `step.start` /
+`tool.pre` / `tool.post` 上等价。`halt` 只在有 turn 可取消的可决策事件上合法
+（`step.start` / `tool.pre` / `tool.post`）；`session.start` 与 `turn.stop` 上的 halt
+在加载时跳过并 warn。
 
 ### command
 

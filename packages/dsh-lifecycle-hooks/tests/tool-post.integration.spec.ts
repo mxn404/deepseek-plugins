@@ -428,6 +428,37 @@ describe('builtin tool.post hooks', () => {
     expect(records[1]!.action).toBeUndefined()
   })
 
+  it('injects context from a builtin context action', async () => {
+    const root = await fixture.repo()
+    await writeHooks(root, [
+      hook({
+        id: 'note',
+        on: 'tool.post',
+        run: { type: 'builtin', action: 'context', text: 'builtin context line' },
+      }),
+    ])
+    const harness = await fixture.harness(root, {}, { bash: true })
+    const adapter = harness.registerAdapter('mock', [
+      bashToolCall('bash-1', 'echo GENERATED-CONTENT'),
+      textResponse('done'),
+    ])
+    const agent = await harness.createAgent('mock')
+
+    await runTurn(agent)
+
+    // Context alone does not touch the result the model reads...
+    expect(requestText(adapter.requests[1]!)).toContain('GENERATED-CONTENT')
+    expect(onlyToolResult(adapter.requests[1]!).isError).toBe(false)
+    // ...it only adds the reminder for the next request.
+    expect(requestText(adapter.requests[1]!)).toContain('builtin context line')
+    expect(hookRunRecords(agent.session)[0]).toMatchObject({
+      event: 'tool.post',
+      hook_id: 'note',
+      handler: 'builtin',
+      action: 'context',
+    })
+  })
+
   it('blocks the result with its reason', async () => {
     const root = await fixture.repo()
     await writeHooks(root, [
@@ -455,6 +486,36 @@ describe('builtin tool.post hooks', () => {
 })
 
 describe('halting from tool.post', () => {
+  it('cancels the turn from a builtin halt action', async () => {
+    const root = await fixture.repo()
+    await writeHooks(root, [
+      hook({
+        id: 'stop',
+        on: 'tool.post',
+        run: { type: 'builtin', action: 'halt', reason: 'builtin halt reason' },
+      }),
+      // A later hook must not run once the turn is being stopped.
+      hook({ id: 'late', on: 'tool.post', run: { type: 'builtin', action: 'block', reason: 'late' } }),
+    ])
+    const harness = await fixture.harness(root, {}, { bash: true })
+    const adapter = harness.registerAdapter('mock', [
+      bashToolCall('bash-1', 'echo RAW-CONTENT && touch ran.txt'),
+      textResponse('done'),
+    ])
+    const agent = await harness.createAgent('mock')
+
+    await runTurn(agent)
+
+    await expect(access(join(root, 'ran.txt'))).resolves.toBeUndefined()
+    expect(lastSessionEvent(agent.session, 'turn/end')?.reason).toEqual({
+      kind: 'aborted',
+      reason: { kind: 'hook', reason: 'builtin halt reason' },
+    })
+    expect(hookRunRecords(agent.session).map(record => record.hook_id)).toEqual(['stop'])
+    expect(hookRunRecords(agent.session)[0]).toMatchObject({ event: 'tool.post', action: 'halt' })
+    expect(adapter.requests).toHaveLength(1)
+  })
+
   it('cancels the turn and withholds the result the hook saw', async () => {
     const root = await fixture.repo()
     await writeHookScript(root, '.dsh/hooks/stop.mjs', nodeScript(`
