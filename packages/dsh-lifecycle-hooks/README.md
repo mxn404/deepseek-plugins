@@ -423,7 +423,11 @@ deny 本次调用，`tool.post` 的 halt 同时把该结果变成错误，模型
   连续 continue 次数）。
 - `error` 只在运行失败时出现；`onFailure: "block"` 时同一条记录会同时带 `error` 与合成的
   `action`。
-- `audit: false` 时完全不写。本插件没有 UI，日志与这条记录是唯一的事后可观测面。
+- **写不进 Session 时兜底到文件**：实验性的 plugin-record API 不可用、或宿主拒收这条记录
+  时，同一份 payload 会以一行一条 JSON 的形式追加到 `<session cwd>/.dsh/hooks-audit.jsonl`，
+  每个文件只 warn 一次；成功的记录路径**不会**产生这个文件。
+- `audit: false` 时完全不写——Session 记录与文件兜底都不写。本插件没有 UI，日志与这条记录
+  是唯一的事后可观测面。
 
 `ask` 的最终结果**不在**插件记录里：宿主在插件返回 `{ kind: 'ask' }` 之后才问 answerer，
 并把结果写成同一条 session 里的 durable 事件对——`approval/asked`（`toolName`、`callId`、

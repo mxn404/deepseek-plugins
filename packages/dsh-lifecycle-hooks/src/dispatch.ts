@@ -173,7 +173,7 @@ export class HookDispatcher {
       }
     }
 
-    this.record(call.session, runs, call.continuedCount)
+    this.record(call.session, runs, call.cwd, call.continuedCount)
     const merged = mergeDecisions(allowedDecisions(runs, plan.actions, this.options.warn))
     if (merged === undefined) return undefined
     if (call.signal.aborted) return undefined
@@ -237,7 +237,7 @@ export class HookDispatcher {
     this.reportDetachedDecision(plan, run)
     // The event never sees this decision; the record still says what the run
     // produced, which is the only trace a detached outcome leaves.
-    this.record(call.session, [run], call.continuedCount)
+    this.record(call.session, [run], call.cwd, call.continuedCount)
   }
 
   /**
@@ -286,13 +286,23 @@ export class HookDispatcher {
    * Append one audit record per run, if auditing is on.
    * @param session - the Session the runs belong to.
    * @param runs - the runs to record, in configuration order.
+   * @param cwd - the Session's current directory, where the fallback file goes.
    * @param continuedCount - the event's consecutive-continue count, when it has one.
    */
-  private record(session: Session, runs: readonly HookRun[], continuedCount?: number): void {
+  private record(
+    session: Session,
+    runs: readonly HookRun[],
+    cwd: string,
+    continuedCount?: number,
+  ): void {
     if (!this.options.audit) return
     for (const run of runs) {
       try {
-        recordHookRun(session, run, continuedCount)
+        recordHookRun(session, run, {
+          cwd,
+          warn: this.options.warn,
+          ...continuedCount === undefined ? {} : { continuedCount },
+        })
       } catch (error) {
         this.options.warn(`hook run for "${run.hook.id}" was not recorded: ${messageOf(error)}`)
       }

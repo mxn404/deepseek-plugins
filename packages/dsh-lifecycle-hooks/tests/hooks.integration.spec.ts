@@ -342,6 +342,8 @@ describe('configuration', () => {
 
     expect(requestText(adapter.requests[1]!)).toContain('reading is blocked')
     expect(hookRunRecords(agent.session)).toEqual([])
+    // Audit off writes neither the Session record nor the file fallback.
+    await expect(access(join(root, '.dsh', 'hooks-audit.jsonl'))).rejects.toThrow()
   })
 })
 
