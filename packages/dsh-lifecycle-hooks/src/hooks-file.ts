@@ -31,11 +31,8 @@ const KNOWN_EVENTS: ReadonlySet<string> = new Set<HookEvent>([
   'notification',
 ])
 
-/** Handler kinds a later ticket adds; naming one is a "not yet" warning, not a typo. */
-const KNOWN_HANDLER_KINDS: ReadonlySet<string> = new Set(['command', 'module'])
-
 /** Actions a later ticket adds; naming one is a "not yet" warning, not a typo. */
-const KNOWN_ACTIONS: ReadonlySet<string> = new Set(['ask', 'block', 'continue', 'halt', 'inject'])
+const KNOWN_ACTIONS: ReadonlySet<string> = new Set(['ask', 'block', 'continue', 'halt', 'context', 'inject'])
 
 /** Result of validating one hooks file. */
 export type HooksParse =
@@ -196,13 +193,24 @@ type RunParse =
 function parseRun(raw: unknown): RunParse {
   if (!isRecord(raw)) return { error: '"run" must be an object' }
   if (typeof raw.type !== 'string') return { error: '"run.type" must be a string' }
-  if (raw.type !== 'builtin') {
-    return {
-      error: KNOWN_HANDLER_KINDS.has(raw.type)
-        ? `handler type "${raw.type}" is not supported by this build`
-        : `unknown handler type "${raw.type}"`,
-    }
+  switch (raw.type) {
+    case 'builtin':
+      return parseBuiltinRun(raw)
+    case 'command':
+      return parseCommandRun(raw)
+    case 'module':
+      return { error: 'handler type "module" is not supported by this build' }
+    default:
+      return { error: `unknown handler type "${raw.type}"` }
   }
+}
+
+/**
+ * Parse a `builtin` run: one action, denied by this build.
+ * @param raw - the entry's `run` value, known to be an object.
+ * @returns the executable run, or the reason the entry must be dropped.
+ */
+function parseBuiltinRun(raw: Record<string, unknown>): RunParse {
   if (typeof raw.action !== 'string') return { error: '"run.action" must be a string' }
   if (raw.action !== 'deny') {
     return {
@@ -215,6 +223,21 @@ function parseRun(raw: unknown): RunParse {
     ? raw.reason
     : undefined
   return { run: { type: 'builtin', action: 'deny', reason: reason ?? 'denied by a lifecycle hook' } }
+}
+
+/**
+ * Parse a `command` run: the command line and its detachment flag.
+ * @param raw - the entry's `run` value, known to be an object.
+ * @returns the executable run, or the reason the entry must be dropped.
+ */
+function parseCommandRun(raw: Record<string, unknown>): RunParse {
+  if (typeof raw.command !== 'string' || raw.command.trim().length === 0) {
+    return { error: '"run.command" must be a non-empty string' }
+  }
+  if (raw.async !== undefined && typeof raw.async !== 'boolean') {
+    return { error: '"run.async" must be a boolean' }
+  }
+  return { run: { type: 'command', command: raw.command, async: raw.async === true } }
 }
 
 /**

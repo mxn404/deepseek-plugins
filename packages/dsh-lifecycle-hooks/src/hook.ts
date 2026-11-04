@@ -29,8 +29,8 @@ export type HookEvent =
 /** Handler kinds the `.dsh/hooks.json` vocabulary names. */
 export type HookHandlerKind = 'builtin' | 'command' | 'module'
 
-/** Actions the `.dsh/hooks.json` vocabulary names. This build executes `deny`. */
-export type HookAction = 'deny' | 'ask' | 'block' | 'continue' | 'halt' | 'inject'
+/** Actions the `.dsh/hooks.json` vocabulary names. This build executes `deny`, `context`, and `halt`. */
+export type HookAction = 'deny' | 'ask' | 'block' | 'continue' | 'halt' | 'context' | 'inject'
 
 /**
  * Whether a failing hook lets the event through (`open`, the default) or turns
@@ -38,12 +38,45 @@ export type HookAction = 'deny' | 'ask' | 'block' | 'continue' | 'halt' | 'injec
  */
 export type HookFailurePolicy = 'open' | 'block'
 
-/** The one handler this build executes: a one-line builtin decision. */
+/** A one-line builtin decision, applied without running anything. */
 export interface BuiltinDenyRun {
   readonly type: 'builtin'
   readonly action: 'deny'
   /** Model-facing reason; never empty. */
   readonly reason: string
+}
+
+/**
+ * A command handler: a process run through `ctx.shell` for every matching
+ * event, with the event payload on stdin and `DSH_HOOK_*` facts in its
+ * environment.
+ */
+export interface CommandRun {
+  readonly type: 'command'
+  /** Shell command line, executed in the Session's current directory. */
+  readonly command: string
+  /**
+   * Detached run: it never contributes to the event's decision, so the event
+   * does not wait for it. Its side effect and its audit row still happen; the
+   * plugin aborts it on disposal if it is still running.
+   */
+  readonly async: boolean
+}
+
+/** What a matching hook does, discriminated by its handler kind. */
+export type HookHandler = BuiltinDenyRun | CommandRun
+
+/** One hook run's contribution to its event's decision. */
+export interface HookDecision {
+  /**
+   * What the hook asks the event to do. Absent when the hook only adds
+   * context; an action the event does not support is warned about and ignored.
+   */
+  readonly action?: HookAction
+  /** Model-facing reason for the action, when the action has one. */
+  readonly reason?: string
+  /** Reminder lines for the model, concatenated across hooks in configuration order. */
+  readonly context?: readonly string[]
 }
 
 /** One validated hook entry. */
@@ -55,7 +88,7 @@ export interface Hook {
   /** Which calls it selects; `undefined` selects every call at that point. */
   readonly match: HookMatch | undefined
   /** What it does when it matches. */
-  readonly run: BuiltinDenyRun
+  readonly run: HookHandler
   /** Per-entry timeout, resolved from the entry or the row's `defaultTimeoutMs`. */
   readonly timeoutMs: number
   /** Failure policy, applied by the handler kinds that can fail. */
