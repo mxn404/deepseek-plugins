@@ -1,5 +1,17 @@
 # dsh-worktree-switch
 
+## 0.3.0
+
+### Minor Changes
+
+- While a session runs in a worktree copy, the host half now denies shell commands that
+  would run Git against the project checkout (`tools/pre-execute`), and the denial reason
+  tells the model how to bring main's latest into the copy instead (`git fetch origin main`
+  then `merge`/`rebase`). The guard matches a command that names the checkout by absolute
+  path, or a `workdir` that resolves into the checkout, so it is a heuristic net rather
+  than a sandbox boundary; it predicates on the same registry as the scope hint, and
+  `guardSourceCheckout: false` turns it off.
+
 ## 0.2.2
 
 ### Patch Changes

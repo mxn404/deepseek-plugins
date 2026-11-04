@@ -1,6 +1,6 @@
 {
   "name": "dsh-worktree-switch",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "A New Session switch that puts the conversation into a throwaway Git worktree under the project's worktree pool (`<project>/.dsh/worktrees` by default), plus a panel to inspect and discard the copies.",
   "keywords": [
     "dsh",
@@ -73,6 +73,7 @@
     "@deepseek-ai/dsh-client-ui-slots": ">=0.2.1-rc.5 <0.2.2-0",
     "@deepseek-ai/dsh-client-ui-workspace": ">=0.2.1-rc.5 <0.2.2-0",
     "@deepseek-ai/dsh-experimental-worktree": ">=0.2.1-rc.5 <0.2.2-0",
+    "@deepseek-ai/dsh-tools": ">=0.2.1-rc.5 <0.2.2-0",
     "@deepseek-ai/schemastery": "^3.18.2"
   },
   "devDependencies": {
@@ -103,6 +104,7 @@
     "@deepseek-ai/dsh-subprocess": "0.2.1-rc.5",
     "@deepseek-ai/dsh-subprocess-local": "0.2.1-rc.5",
     "@deepseek-ai/dsh-system-prompt": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.5",
     "@deepseek-ai/dsh-working-directory": "0.2.1-rc.5",
     "@deepseek-ai/schemastery": "3.18.5",
     "@testing-library/react": "^16.3.3",

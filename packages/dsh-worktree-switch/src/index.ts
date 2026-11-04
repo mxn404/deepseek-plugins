@@ -16,6 +16,7 @@ import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-experimental-worktree'
 import type {} from '@deepseek-ai/dsh-subprocess'
 import type {} from '@deepseek-ai/dsh-working-directory'
+import { installSourceCheckoutGuard } from './host/guard.ts'
 import { createWorktreeToggle, detectSessionScope } from './host/handlers.ts'
 import { registerWorktreeRoutes } from './host/routes.ts'
 import { installWorktreeScope, SessionScopeRegistry } from './host/scope.ts'
@@ -35,6 +36,8 @@ export const inject = ['agents', 'connection', 'subprocess', 'worktrees', 'worki
 export interface Config {
   /** Default for a project the user has never switched either way. */
   defaultEnabled: boolean
+  /** Refuse shell commands that run Git against the project checkout while the session is in a copy. */
+  guardSourceCheckout: boolean
 }
 
 /** Schemastery schema for {@link Config}. */
@@ -42,6 +45,9 @@ export const Config: Schema<Config> = Schema.object({
   defaultEnabled: Schema.boolean()
     .default(true)
     .description('Start a new session in a worktree copy until the user turns the switch off for that project.'),
+  guardSourceCheckout: Schema.boolean()
+    .default(true)
+    .description('While a session is in a copy, deny shell commands that run Git against the project checkout.'),
 })
 
 /**
@@ -62,5 +68,6 @@ export function apply(ctx: Context, config: Config): void {
     registry: scopes,
     detect: (agent, signal) => detectSessionScope(ctx, agent, signal),
   })
+  if (config.guardSourceCheckout) installSourceCheckoutGuard(ctx, scopes)
   registerWorktreeRoutes(ctx, toggle)
 }
