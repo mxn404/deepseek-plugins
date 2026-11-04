@@ -9,6 +9,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
+import type { HookDecision } from '../src/hook.ts'
 import type { HookRun } from '../src/handler.ts'
 import { parseHooks } from '../src/hooks-file.ts'
 import {
@@ -19,7 +20,7 @@ import {
   matchesToolName,
   type ToolPattern,
 } from '../src/match.ts'
-import { mergeDecisions } from '../src/outcome.ts'
+import { allowedDecisions, mergeDecisions } from '../src/outcome.ts'
 
 const DEFAULTS = 30_000
 
@@ -90,7 +91,42 @@ describe('the hooks file schema', () => {
       }],
     }), 30_000)
     expect(parsed.hooks[0]).toMatchObject({ timeoutMs: 1500, onFailure: 'block' })
-    expect(parsed.hooks[0]?.run.reason).toBe('nope')
+    expect(parsed.hooks[0]?.run).toMatchObject({ reason: 'nope' })
+  })
+
+  it('accepts a command handler on tool.pre', () => {
+    const parsed = hooksOf(JSON.stringify({
+      version: 1,
+      hooks: [{
+        id: 'gate',
+        on: 'tool.pre',
+        match: { tool: 'bash' },
+        run: { type: 'command', command: 'node .dsh/hooks/gate.mjs' },
+        timeoutMs: 250,
+        onFailure: 'block',
+      }],
+    }))
+    expect(parsed.warnings).toEqual([])
+    expect(parsed.hooks[0]).toEqual({
+      id: 'gate',
+      on: 'tool.pre',
+      match: { tool: { kind: 'exact', name: 'bash' }, args: undefined },
+      run: { type: 'command', command: 'node .dsh/hooks/gate.mjs', async: false },
+      timeoutMs: 250,
+      onFailure: 'block',
+    })
+  })
+
+  it('accepts a detached command handler', () => {
+    const parsed = hooksOf(JSON.stringify({
+      version: 1,
+      hooks: [{
+        id: 'notify',
+        on: 'tool.pre',
+        run: { type: 'command', command: 'echo noted', async: true },
+      }],
+    }))
+    expect(parsed.hooks[0]?.run).toEqual({ type: 'command', command: 'echo noted', async: true })
   })
 
   it.each([
@@ -120,9 +156,24 @@ describe('the hooks file schema', () => {
     ],
     ['a missing run', { id: 'a', on: 'tool.pre' }, '"run"'],
     [
-      'a command handler',
-      { id: 'a', on: 'tool.pre', run: { type: 'command', command: 'true' } },
+      'a module handler',
+      { id: 'a', on: 'tool.pre', run: { type: 'module', path: '.dsh/hooks/gate.mjs' } },
       'not supported by this build',
+    ],
+    [
+      'a command with no command string',
+      { id: 'a', on: 'tool.pre', run: { type: 'command' } },
+      '"run.command"',
+    ],
+    [
+      'a command with an empty command string',
+      { id: 'a', on: 'tool.pre', run: { type: 'command', command: '   ' } },
+      '"run.command"',
+    ],
+    [
+      'a non-boolean async flag',
+      { id: 'a', on: 'tool.pre', run: { type: 'command', command: 'true', async: 'yes' } },
+      '"run.async"',
     ],
     [
       'an unknown handler type',
@@ -236,36 +287,124 @@ describe('the match vocabulary', () => {
 })
 
 describe('merging one event’s decisions', () => {
-  const run = (id: string, action: 'deny' | undefined, reason = 'because'): HookRun => ({
+  const run = (id: string, decision?: HookDecision, error?: string): HookRun => ({
     hook: {
       id,
       on: 'tool.pre',
       match: undefined,
-      run: { type: 'builtin', action: 'deny', reason },
+      run: { type: 'builtin', action: 'deny', reason: 'because' },
       timeoutMs: DEFAULTS,
       onFailure: 'open',
     },
     source: '/repo/.dsh/hooks.json',
     event: 'tool.pre',
     handler: 'builtin',
-    decision: action === undefined ? undefined : { action, reason },
-    error: undefined,
+    decision,
+    error,
     durationMs: 1,
+    exitCode: undefined,
   })
 
   it('is undefined when no run decided anything', () => {
     expect(mergeDecisions([])).toBeUndefined()
-    expect(mergeDecisions([run('observer', undefined)])).toBeUndefined()
+    expect(mergeDecisions([run('observer')])).toBeUndefined()
+    expect(mergeDecisions([run('empty-context', { context: [] })])).toBeUndefined()
   })
 
   it('takes the first denial in configuration order', () => {
-    expect(mergeDecisions([run('first', 'deny', 'one'), run('second', 'deny', 'two')]))
-      .toEqual({ action: 'deny', reason: 'one' })
+    expect(mergeDecisions([
+      run('first', { action: 'deny', reason: 'one' }),
+      run('second', { action: 'deny', reason: 'two' }),
+    ])).toEqual({ action: 'deny', reason: 'one', context: [] })
   })
 
-  it('ignores runs that failed', () => {
-    const failed: HookRun = { ...run('broken', undefined), error: 'boom' }
-    expect(mergeDecisions([failed, run('later', 'deny', 'two')]))
-      .toEqual({ action: 'deny', reason: 'two' })
+  it('fills a missing denial reason', () => {
+    expect(mergeDecisions([run('quiet', { action: 'deny' })]))
+      .toEqual({ action: 'deny', reason: 'denied by a lifecycle hook', context: [] })
+  })
+
+  it('lets a later halt outrank an earlier denial', () => {
+    expect(mergeDecisions([
+      run('deny', { action: 'deny', reason: 'nope' }),
+      run('halt', { action: 'halt', reason: 'stop the turn' }),
+    ])).toEqual({ action: 'halt', reason: 'stop the turn', context: [] })
+  })
+
+  it('keeps a halt ahead of a later denial', () => {
+    // Only a halt stops later handlers, but the merge ranking must not depend
+    // on that: halt wins wherever it appears.
+    expect(mergeDecisions([
+      run('halt', { action: 'halt', reason: 'stop' }),
+      run('deny', { action: 'deny', reason: 'nope' }),
+    ])).toEqual({ action: 'halt', reason: 'stop', context: [] })
+  })
+
+  it('concatenates every context in configuration order', () => {
+    expect(mergeDecisions([
+      run('one', { action: 'deny', reason: 'no', context: ['first', 'second'] }),
+      run('two', { context: ['third'] }),
+      run('three', { action: 'deny', reason: 'later', context: ['fourth'] }),
+    ])).toEqual({ action: 'deny', reason: 'no', context: ['first', 'second', 'third', 'fourth'] })
+  })
+
+  it('returns context alone when no hook blocked the event', () => {
+    expect(mergeDecisions([run('note', { context: ['just so you know'] })]))
+      .toEqual({ context: ['just so you know'] })
+  })
+
+  it('ignores a failed run that contributed no decision', () => {
+    const failed = run('broken', undefined, 'boom')
+    expect(mergeDecisions([failed, run('later', { action: 'deny', reason: 'two' })]))
+      .toEqual({ action: 'deny', reason: 'two', context: [] })
+  })
+
+  it('keeps a synthesized blocking decision that accompanies a failure', () => {
+    // `onFailure: "block"` records the failure and a denial in the same run;
+    // the merge must honour the denial instead of discarding the whole run.
+    const blocked = run('broken', { action: 'deny', reason: 'hook "broken" failed: boom' }, 'boom')
+    expect(mergeDecisions([blocked]))
+      .toEqual({ action: 'deny', reason: 'hook "broken" failed: boom', context: [] })
+  })
+})
+
+describe('filtering actions an event does not support', () => {
+  const run = (id: string, decision: HookDecision): HookRun => ({
+    hook: {
+      id,
+      on: 'tool.pre',
+      match: undefined,
+      run: { type: 'command', command: 'true', async: false },
+      timeoutMs: DEFAULTS,
+      onFailure: 'open',
+    },
+    source: '/repo/.dsh/hooks.json',
+    event: 'tool.pre',
+    handler: 'command',
+    decision,
+    error: undefined,
+    durationMs: 1,
+    exitCode: 0,
+  })
+
+  it('drops an unsupported action, warns about it, and keeps the hook’s context', () => {
+    const warnings: string[] = []
+    const filtered = allowedDecisions(
+      [run('asker', { action: 'ask', reason: 'may I?', context: ['one'] })],
+      ['deny', 'context', 'halt'],
+      message => warnings.push(message),
+    )
+    expect(filtered[0]?.decision).toEqual({ context: ['one'] })
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('asker')
+    expect(warnings[0]).toContain('"ask"')
+    expect(warnings[0]).toContain('tool.pre')
+  })
+
+  it('passes a supported action through untouched', () => {
+    const warnings: string[] = []
+    const decision = { action: 'deny', reason: 'no' } as const
+    expect(allowedDecisions([run('gate', decision)], ['deny'], message => warnings.push(message))[0]?.decision)
+      .toEqual(decision)
+    expect(warnings).toEqual([])
   })
 })

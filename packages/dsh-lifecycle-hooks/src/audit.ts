@@ -31,10 +31,17 @@ export interface HookRunRecord {
   readonly hook_id: string
   /** Handler kind that ran. */
   readonly handler: HookHandlerKind
-  /** The decision the run produced, absent when it observed or failed. */
+  /**
+   * The action the run produced, absent when it observed or failed. Whether
+   * the event applied it is a separate question: an event whose plan does not
+   * support the action ignores it (with a warning), and a detached run's
+   * outcome never reaches the event at all.
+   */
   readonly action?: HookAction
-  /** Wall-clock milliseconds the run took. */
+  /** Clock milliseconds the run took. */
   readonly duration_ms: number
+  /** Exit code of a command run; absent for a builtin or a signal death. */
+  readonly exit_code?: number
   /** Failure detail, absent on a successful run. */
   readonly error?: string
 }
@@ -51,13 +58,18 @@ declare module '@deepseek-ai/dsh-session/types' {
  * @param run - the measured run.
  */
 export function recordHookRun(session: Session, run: HookRun): void {
+  // A run can carry context without an action; the record must then omit
+  // `action` entirely, because an explicit `undefined` is not lossless JSON
+  // and the Session would reject the whole record.
+  const action = run.decision?.action
   const record: HookRunRecord = {
     event: run.event,
     source: run.source,
     hook_id: run.hook.id,
     handler: run.handler,
-    ...run.decision === undefined ? {} : { action: run.decision.action },
+    ...action === undefined ? {} : { action },
     duration_ms: run.durationMs,
+    ...run.exitCode === undefined ? {} : { exit_code: run.exitCode },
     ...run.error === undefined ? {} : { error: run.error },
   }
   appendPluginRecord(session, 'plugin:dsh-lifecycle-hooks/run', record)

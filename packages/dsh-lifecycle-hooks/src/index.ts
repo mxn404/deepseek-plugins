@@ -4,29 +4,33 @@
  * A repository commits `.dsh/hooks.json`; the plugin discovers the layers that
  * apply to the Session's current directory (the user-level file, then every
  * project and local file from the nearest `.git` root down to that directory)
- * and dispatches their hooks at dsh lifecycle extension points. This slice is
- * the walking skeleton: `tool.pre` with the `builtin` `deny` action, so a
- * dangerous command never runs and the model receives the hook's reason as the
- * tool result.
+ * and dispatches their hooks at dsh lifecycle extension points. This slice
+ * dispatches `tool.pre`, with three ways to decide it: a `builtin` deny, a
+ * `command` script that reads the call on stdin and answers on stdout, and a
+ * shared merge that lets a later `halt` stop the turn.
  *
- * The wiring is deliberately thin. Discovery lives in `discovery.ts`, reading
- * and validating one hooks file in `hooks-file.ts`, matching in `match.ts`,
- * execution in `handler.ts`, the decision merge in `outcome.ts`, and the audit
- * row in `audit.ts`; `apply` only connects them to `tools/pre-execute`.
+ * The wiring here is deliberately thin. Discovery lives in `discovery.ts`,
+ * reading and validating one hooks file in `hooks-file.ts`, matching in
+ * `match.ts`, execution in `handler.ts` / `command.ts`, the per-event payload in
+ * `payload.ts`, the single resolve→run→record→merge→apply pipeline in
+ * `dispatch.ts`, the decision ranking in `outcome.ts`, and the audit row in
+ * `audit.ts`. `apply` only connects them to the host: the watcher lifecycle,
+ * the step tracker, and one `tools/pre-execute` listener.
  *
  * @module dsh-lifecycle-hooks
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { Session } from '@deepseek-ai/dsh-session'
-import type {} from '@deepseek-ai/dsh-working-directory'
+import type {} from '@deepseek-ai/dsh-session-projection'
 import type { PreToolDecision } from '@deepseek-ai/dsh-tools'
-import { recordHookRun } from './audit.ts'
+import type {} from '@deepseek-ai/dsh-working-directory'
 import { Config } from './config.ts'
+import { createDetachedRuns } from './detached.ts'
 import { HookResolver } from './discovery.ts'
-import { executeHook, type HookRun } from './handler.ts'
-import { matchesHook } from './match.ts'
-import { mergeDecisions } from './outcome.ts'
+import { HookDispatcher } from './dispatch.ts'
+import { StepTracker } from './step.ts'
+import { toolPrePlan } from './tool-pre.ts'
 import { HookWatcher } from './watch.ts'
 
 /** Plugin id: package name and bundle row id. */
@@ -47,14 +51,16 @@ export type { Config as HooksConfig }
  * @param config - validated row config.
  */
 export function apply(ctx: Context, config: Config): void {
+  const warn = (message: string): void => {
+    ctx.logger.warn(`dsh-lifecycle-hooks: ${message}`)
+  }
+
   const resolver = new HookResolver({
     defaultTimeoutMs: config.defaultTimeoutMs,
     userHooks: config.userHooks,
     projectHooks: config.projectHooks,
     localHooks: config.localHooks,
-    warn: (message) => {
-      ctx.logger.warn(`dsh-lifecycle-hooks: ${message}`)
-    },
+    warn,
   })
 
   // One watcher per Session: two Sessions in different directories watch their
@@ -87,10 +93,17 @@ export function apply(ctx: Context, config: Config): void {
     watcher.retarget(await resolver.directories(cwd))
   }
 
+  // Detached command runs (entries with `async: true`) are tracked so disposal
+  // aborts a still-running process instead of leaking it past the plugin.
+  const detached = createDetachedRuns()
+  const steps = new StepTracker()
+
   // `working-directory/change` is a durable SessionEvent, not a Cordis event:
   // observe it through the session's append feed and follow the Session into
-  // its new tree before the next tool call arrives.
+  // its new tree before the next tool call arrives. The same feed keeps the
+  // step number each payload reports.
   ctx.on('session/event', (session, event) => {
+    steps.observe(session, event)
     if (event.type !== 'working-directory/change') return
     retarget(session, event.data.cwd).catch(() => {
       // Discovery never throws for a missing file; a transient filesystem
@@ -101,6 +114,24 @@ export function apply(ctx: Context, config: Config): void {
   ctx.effect(() => () => {
     for (const watcher of liveWatchers) watcher.close()
     liveWatchers.clear()
+    return detached.drain()
+  })
+
+  const dispatcher = new HookDispatcher({
+    resolver,
+    // `ctx.get` rather than `inject`: a deployment without a shell service
+    // makes each command hook fail (and its `onFailure` policy apply), instead
+    // of making the whole plugin unavailable.
+    shell: () => ctx.get('shell'),
+    detached,
+    audit: config.audit,
+    warn,
+    onResolve: (session, directories) => {
+      // Keep the watcher aligned with the committed cwd even when no hooks
+      // exist yet: a layer created mid-session must become visible on the next
+      // event.
+      watcherFor(session)?.retarget(directories)
+    },
   })
 
   ctx.on('tools/pre-execute', async (exec, next): Promise<PreToolDecision> => {
@@ -111,43 +142,17 @@ export function apply(ctx: Context, config: Config): void {
     // after the gate settles either way.
     if (exec.signal.aborted) return next()
 
-    const runs: HookRun[] = []
-    try {
-      const resolved = await resolver.resolve(ctx.workingDirectory.get(agent.session))
-      // Keep the watcher aligned with the committed cwd even when no hooks exist
-      // yet: a layer created mid-session must become visible on the next event.
-      watcherFor(agent.session)?.retarget(resolved.directories)
-      if (resolved.layers.length === 0) return next()
-      for (const layer of resolved.layers) {
-        for (const hook of layer.hooks) {
-          if (!matchesHook(hook.match, exec.name, exec.arguments)) continue
-          runs.push(await executeHook(hook, layer.source))
-        }
-      }
-    } catch (error) {
-      // A hooks-file problem must never break the tool pipeline: fail open with
-      // one warning, exactly as a malformed file does.
-      const detail = error instanceof Error ? error.message : String(error)
-      ctx.logger.warn(`dsh-lifecycle-hooks: hook dispatch failed: ${detail}`)
-      return next()
-    }
-
-    if (runs.length === 0) return next()
-
-    if (config.audit) {
-      for (const run of runs) {
-        try {
-          recordHookRun(agent.session, run)
-        } catch (error) {
-          const detail = error instanceof Error ? error.message : String(error)
-          ctx.logger.warn(`dsh-lifecycle-hooks: hook run for "${run.hook.id}" was not recorded: ${detail}`)
-        }
-      }
-    }
-
-    const decision = mergeDecisions(runs)
-    if (decision === undefined) return next()
-    if (exec.signal.aborted) return next()
-    return { kind: 'deny', reason: decision.reason }
+    const applied = await dispatcher.dispatch(
+      {
+        session: agent.session,
+        cwd: ctx.workingDirectory.get(agent.session),
+        agentId: agent.id,
+        turn: ctx.get('sessionProjections')?.stateOf(agent.session, 'turnBoundary')?.lastTurn ?? 0,
+        step: steps.of(agent.session),
+        signal: exec.signal,
+      },
+      toolPrePlan(exec, agent),
+    )
+    return applied ?? next()
   })
 }

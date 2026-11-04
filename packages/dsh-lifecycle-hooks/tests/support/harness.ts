@@ -32,8 +32,14 @@ export interface HooksHarness {
   readonly ctx: Context
   /** `$DSH_HOME` the plugin resolves user-level hooks against. */
   readonly dshHome: string
-  /** Warnings the plugin emitted, in order. */
+  /** Every warning the context logged, in order. */
   readonly warnings: string[]
+  /**
+   * The subset of {@link HooksHarness.warnings} this plugin logged. Host
+   * stacks warn about their own environment (process containment, for one), so
+   * an assertion about plugin noise reads this list.
+   */
+  readonly pluginWarnings: string[]
   /** Register one mock model route and return its adapter. */
   registerAdapter(route: string, script: ConstructorParameters<typeof MockAdapter>[0]): MockAdapter
   /** Create a production Agent on one registered route. */
@@ -82,14 +88,18 @@ export async function createHooksHarness(
   await ctx.plugin(DshLifecycleHooks, config as DshLifecycleHooks.Config)
   await ctx.plugin(AgentLoop, { agents: [] })
   const warnings: string[] = []
+  const pluginWarnings: string[] = []
   vi.spyOn(ctx.logger, 'warn').mockImplementation((...args: unknown[]) => {
-    warnings.push(args.map(value => String(value)).join(' '))
+    const message = args.map(value => String(value)).join(' ')
+    warnings.push(message)
+    if (message.startsWith(`${DshLifecycleHooks.name}:`)) pluginWarnings.push(message)
   })
   let sessions = 0
   return {
     ctx,
     dshHome,
     warnings,
+    pluginWarnings,
     registerAdapter(route, script) {
       const adapter = new MockAdapter(script)
       ctx.llm.registerAdapter([route], adapter)
