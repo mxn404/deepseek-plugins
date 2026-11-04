@@ -16,10 +16,11 @@
  */
 
 import { readFile, stat } from 'node:fs/promises'
-import type { Hook, HookEvent, SupportedHookEvent } from './hook.ts'
+import type { DispatchedHookEvent, Hook, HookAction, HookEvent } from './hook.ts'
+import { EVENT_ACTIONS } from './hook.ts'
 import { compileToolPattern, invalidArgPattern, isRecord, type HookMatch } from './match.ts'
 
-/** Hook events the format names. */
+/** Hook events the format names; this build dispatches the ones in `EVENT_ACTIONS`. */
 const KNOWN_EVENTS: ReadonlySet<string> = new Set<HookEvent>([
   'session.start',
   'step.start',
@@ -31,24 +32,8 @@ const KNOWN_EVENTS: ReadonlySet<string> = new Set<HookEvent>([
   'notification',
 ])
 
-/** Lifecycle points this build dispatches; a later ticket adds its own here. */
-const SUPPORTED_EVENTS: ReadonlySet<string> = new Set<SupportedHookEvent>(['tool.pre', 'tool.post'])
-
-/**
- * Builtin actions each supported event accepts.
- *
- * The builtin vocabulary is the spec's `{action, reason?, text?}`: `deny` and
- * `block` carry a reason, `inject` one reminder line, and `replace` the
- * model-visible text of a tool result (the spec has no separate builtin
- * replace action, so this is the one extension the event documents).
- */
-const BUILTIN_ACTIONS: Readonly<Record<SupportedHookEvent, readonly string[]>> = {
-  'tool.pre': ['deny'],
-  'tool.post': ['block', 'replace', 'inject'],
-}
-
-/** Actions a later ticket adds; naming one is a "not yet" warning, not a typo. */
-const KNOWN_ACTIONS: ReadonlySet<string> = new Set([
+/** Actions the format names; one outside the dispatching event's set is a "not yet" warning, not a typo. */
+const KNOWN_ACTIONS: ReadonlySet<string> = new Set<HookAction>([
   'deny',
   'ask',
   'block',
@@ -58,6 +43,48 @@ const KNOWN_ACTIONS: ReadonlySet<string> = new Set([
   'inject',
   'replace',
 ])
+
+/**
+ * Match dimensions each dispatched event offers.
+ *
+ * `session.start` happens before anything is selected, both tool events select
+ * on the call, and `step.start` selects on the presence of a user prompt. The
+ * table is the loader's half of {@link MatchSubject}: an entry naming a
+ * dimension its event does not offer is dropped, never silently ignored.
+ */
+const MATCH_DIMENSIONS: Readonly<Record<DispatchedHookEvent, 'none' | 'tool' | 'prompt'>> = {
+  'session.start': 'none',
+  'step.start': 'prompt',
+  'tool.pre': 'tool',
+  'tool.post': 'tool',
+}
+
+/**
+ * Builtin actions each dispatched event accepts.
+ *
+ * The builtin vocabulary is the spec's `{action, reason?, text?}`: a blocking
+ * action carries a reason, `context` and `inject` one reminder line, and
+ * `replace` the model-visible text of a tool result. `EVENT_ACTIONS` is the
+ * command-handler authority (filtered at dispatch time); this table is the
+ * load-time gate, and it is narrower: `tool.pre` has been deny-only since the
+ * walking skeleton, so widening its builtin vocabulary stays a separate
+ * decision.
+ */
+const BUILTIN_ACTIONS: Readonly<Record<DispatchedHookEvent, readonly HookAction[]>> = {
+  'session.start': ['context'],
+  'step.start': ['deny', 'context', 'halt'],
+  'tool.pre': ['deny'],
+  'tool.post': ['block', 'replace', 'inject'],
+}
+
+/**
+ * Whether one `on` value names an event this build dispatches.
+ * @param value - the string an entry's `on` field holds.
+ * @returns true when a dispatch plan exists for it.
+ */
+function isDispatchedEvent(value: string): value is DispatchedHookEvent {
+  return Object.hasOwn(EVENT_ACTIONS, value)
+}
 
 /** Result of validating one hooks file. */
 export type HooksParse =
@@ -148,13 +175,13 @@ function parseHook(
 
   if (typeof raw.on !== 'string') return skip('"on" must be a string naming a lifecycle event')
   if (!KNOWN_EVENTS.has(raw.on)) return skip(`unknown event "${raw.on}"`)
-  if (!SUPPORTED_EVENTS.has(raw.on)) return skip(`event "${raw.on}" is not supported by this build`)
-  const on = raw.on as SupportedHookEvent
+  if (!isDispatchedEvent(raw.on)) return skip(`event "${raw.on}" is not supported by this build`)
+  const event = raw.on
 
-  const match = parseMatch(raw.match)
+  const match = parseMatch(raw.match, event)
   if ('error' in match) return skip(match.error)
 
-  const run = parseRun(raw.run, on)
+  const run = parseRun(raw.run, event)
   if ('error' in run) return skip(run.error)
 
   let timeoutMs = defaultTimeoutMs
@@ -173,7 +200,7 @@ function parseHook(
     onFailure = raw.onFailure
   }
 
-  return { id, on, match: match.match, run: run.run, timeoutMs, onFailure }
+  return { id, on: event, match: match.match, run: run.run, timeoutMs, onFailure }
 }
 
 /** Match parsing outcome: no clause, a clause, or an entry-level error to report. */
@@ -182,15 +209,25 @@ type MatchParse =
   | { readonly error: string }
 
 /**
- * Parse `match`, if present.
+ * Parse `match`, if present, for one event's dimensions.
+ *
+ * A dimension the event does not use is rejected rather than silently ignored:
+ * `match.tool` on `step.start` or `match.prompt` on `tool.pre` would otherwise
+ * select nothing (or everything) and look like a working rule.
  * @param raw - the entry's `match` value.
+ * @param event - the lifecycle point the entry is bound to.
  * @returns the compiled clause, or the reason the entry must be dropped.
  */
-function parseMatch(raw: unknown): MatchParse {
+function parseMatch(raw: unknown, event: DispatchedHookEvent): MatchParse {
   if (raw === undefined || raw === null) return { match: undefined }
   if (!isRecord(raw)) return { error: '"match" must be an object' }
+  const dimensions = MATCH_DIMENSIONS[event]
+  // `session.start` happens before a turn exists, so it has no selection
+  // dimension at all; an entry carrying one is a mistake, not a no-op.
+  if (dimensions === 'none') return { error: `"match" is not supported on ${event}` }
   let tool: HookMatch['tool']
   if (raw.tool !== undefined) {
+    if (dimensions !== 'tool') return { error: `"match.tool" is not supported on ${event}` }
     if (typeof raw.tool !== 'string') return { error: '"match.tool" must be a string' }
     const compiled = compileToolPattern(raw.tool)
     if (compiled === undefined) return { error: `"match.tool" is not a valid regular expression: ${raw.tool}` }
@@ -198,12 +235,21 @@ function parseMatch(raw: unknown): MatchParse {
   }
   let args: HookMatch['args']
   if (raw.args !== undefined) {
+    if (dimensions !== 'tool') return { error: `"match.args" is not supported on ${event}` }
     if (!isRecord(raw.args)) return { error: '"match.args" must be an object' }
     const invalid: string | undefined = invalidArgPattern(raw.args)
     if (invalid !== undefined) return { error: `"match.args" contains an invalid regular expression: ${invalid}` }
     args = raw.args
   }
-  return { match: { tool, args } }
+  let prompt: boolean | undefined
+  if (raw.prompt !== undefined) {
+    if (dimensions !== 'prompt') {
+      return { error: `"match.prompt" is only supported on step.start, not ${event}` }
+    }
+    if (typeof raw.prompt !== 'boolean') return { error: `"match.prompt" must be a boolean on ${event}` }
+    prompt = raw.prompt
+  }
+  return { match: { tool, args, ...prompt === undefined ? {} : { prompt } } }
 }
 
 /** Run parsing outcome: the executable run, or an entry-level error to report. */
@@ -214,10 +260,10 @@ type RunParse =
 /**
  * Parse `run`, the handler description.
  * @param raw - the entry's `run` value.
- * @param event - the lifecycle point the entry targets, which gates builtin actions.
+ * @param event - the lifecycle point the entry is bound to, which gates builtin actions.
  * @returns the executable run, or the reason the entry must be dropped.
  */
-function parseRun(raw: unknown, event: SupportedHookEvent): RunParse {
+function parseRun(raw: unknown, event: DispatchedHookEvent): RunParse {
   if (!isRecord(raw)) return { error: '"run" must be an object' }
   if (typeof raw.type !== 'string') return { error: '"run.type" must be a string' }
   switch (raw.type) {
@@ -233,43 +279,46 @@ function parseRun(raw: unknown, event: SupportedHookEvent): RunParse {
 }
 
 /**
- * Parse a `builtin` run: one action this event supports.
+ * Parse a `builtin` run: one action the event supports, applied without a
+ * process. `context`, `inject`, and `replace` carry their text; the blocking
+ * actions carry an optional `reason` with a default.
  * @param raw - the entry's `run` value, known to be an object.
- * @param event - the lifecycle point, which decides the legal actions.
+ * @param event - the lifecycle point the entry is bound to.
  * @returns the executable run, or the reason the entry must be dropped.
  */
-function parseBuiltinRun(raw: Record<string, unknown>, event: SupportedHookEvent): RunParse {
+function parseBuiltinRun(raw: Record<string, unknown>, event: DispatchedHookEvent): RunParse {
   if (typeof raw.action !== 'string') return { error: '"run.action" must be a string' }
-  if (!BUILTIN_ACTIONS[event].includes(raw.action)) {
-    return {
-      error: KNOWN_ACTIONS.has(raw.action)
-        ? `action "${raw.action}" is not supported by this build`
-        : `unknown action "${raw.action}"`,
-    }
+  const action = raw.action
+  if (!KNOWN_ACTIONS.has(action)) return { error: `unknown action "${action}"` }
+  if (!BUILTIN_ACTIONS[event].includes(action as HookAction)) {
+    return { error: `action "${action}" is not supported by this build on ${event}` }
   }
-  switch (raw.action) {
+  switch (action) {
+    case 'context':
+    case 'inject':
+    case 'replace': {
+      if (typeof raw.text !== 'string' || raw.text.trim().length === 0) {
+        return { error: `"run.text" must be a non-empty string for action "${action}"` }
+      }
+      return { run: { type: 'builtin', action, text: raw.text } }
+    }
     case 'deny':
-    case 'block': {
+    case 'block':
+    case 'halt': {
       const reason = typeof raw.reason === 'string' && raw.reason.trim().length > 0
         ? raw.reason
         : undefined
-      return {
-        run: {
-          type: 'builtin',
-          action: raw.action,
-          reason: reason ?? `${raw.action === 'deny' ? 'denied' : 'blocked'} by a lifecycle hook`,
-        },
-      }
-    }
-    case 'replace':
-    case 'inject': {
-      if (typeof raw.text !== 'string' || raw.text.trim().length === 0) {
-        return { error: '"run.text" must be a non-empty string' }
-      }
-      return { run: { type: 'builtin', action: raw.action, text: raw.text } }
+      const fallback = action === 'deny'
+        ? 'denied by a lifecycle hook'
+        : action === 'block'
+          ? 'blocked by a lifecycle hook'
+          : 'halted by a lifecycle hook'
+      return { run: { type: 'builtin', action, reason: reason ?? fallback } }
     }
     default:
-      return { error: `unknown action "${raw.action}"` }
+      // Unreachable while `BUILTIN_ACTIONS` names only actions this build can
+      // decide; kept so a later builtin kind has one place to land.
+      return { error: `action "${action}" is not supported by this build on ${event}` }
   }
 }
 

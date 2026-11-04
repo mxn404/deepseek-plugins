@@ -56,11 +56,14 @@ export interface HookRun {
 }
 
 /**
- * The decision a builtin run contributes.
+ * The decision one `builtin` run contributes.
  *
- * `inject` is the spec's builtin way to add context, so it contributes context
- * instead of an action; `replace` carries the text the event puts in front of
- * the model. Both are filtered by the event's own plan like any other outcome.
+ * A blocking action carries the reason the loader already defaulted;
+ * `context` and `inject` carry their reminder line, but only `context` keeps
+ * the action (the merge still has to see it, and the audit row names it),
+ * while `inject` is the spec's builtin spelling of plain extra context;
+ * `replace` carries the text the event puts in front of the model. Every one
+ * is filtered by the event's own plan like any other outcome.
  * @param run - the validated builtin run.
  * @returns its contribution to the event's merge.
  */
@@ -68,11 +71,14 @@ function builtinDecision(run: BuiltinRun): HookDecision {
   switch (run.action) {
     case 'deny':
     case 'block':
+    case 'halt':
       return { action: run.action, reason: run.reason }
-    case 'replace':
-      return { action: 'replace', replace: { text: run.text } }
+    case 'context':
+      return { action: 'context', context: [run.text] }
     case 'inject':
       return { context: [run.text] }
+    case 'replace':
+      return { action: 'replace', replace: { text: run.text } }
   }
 }
 

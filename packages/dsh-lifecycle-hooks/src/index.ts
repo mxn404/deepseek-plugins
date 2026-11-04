@@ -5,9 +5,11 @@
  * apply to the Session's current directory (the user-level file, then every
  * project and local file from the nearest `.git` root down to that directory)
  * and dispatches their hooks at dsh lifecycle extension points. This slice
- * dispatches `tool.pre` (deny, context, halt) and `tool.post` (block, replace,
- * context, halt), each through the same merge of `builtin` and `command`
- * outcomes.
+ * dispatches `session.start` (context before the first request),
+ * `step.start` (deny a submitted prompt, add context to the step, or halt),
+ * `tool.pre` (deny the call, add context for the next request, or halt), and
+ * `tool.post` (block, replace, or context after the tool ran), each through
+ * the same merge of `builtin` and `command` outcomes.
  *
  * The wiring here is deliberately thin. Discovery lives in `discovery.ts`,
  * reading and validating one hooks file in `hooks-file.ts`, matching in
@@ -15,13 +17,14 @@
  * `payload.ts`, the single resolve→run→record→merge→apply pipeline in
  * `dispatch.ts`, the decision ranking in `outcome.ts`, and the audit row in
  * `audit.ts`. `apply` only connects them to the host: the watcher lifecycle,
- * the step tracker, and one listener per dispatched event, each of which hands
+ * the step tracker, and one listener per dispatch plan, each of which hands
  * the shared dispatcher a plan and nothing else.
  *
  * @module dsh-lifecycle-hooks
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-projection'
 import type { PostToolDecision, PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
@@ -30,7 +33,9 @@ import { Config } from './config.ts'
 import { createDetachedRuns } from './detached.ts'
 import { HookResolver } from './discovery.ts'
 import { HookDispatcher } from './dispatch.ts'
+import { sessionStartPlan } from './session-start.ts'
 import { StepTracker } from './step.ts'
+import { stepStartPlan } from './step-start.ts'
 import { toolPostPlan } from './tool-post.ts'
 import { toolPrePlan } from './tool-pre.ts'
 import { HookWatcher } from './watch.ts'
@@ -159,6 +164,48 @@ export function apply(ctx: Context, config: Config): void {
       signal: exec.signal,
     }
   }
+
+  // `session.start`: serial and awaited, so the injected reminder is already in
+  // the next-step inbox when `create()` resolves. The first pre-step claims that
+  // inbox, which is what makes the context visible on the first request rather
+  // than on a later wake-up.
+  ctx.on('agent/created', async ({ agent, source, signal }): Promise<undefined> => {
+    // A creation signal bounds the hook runs; the plugin's own disposal signal
+    // bounds them too, so a hook cannot outlive the instance.
+    const ownerSignal = signal === undefined ? detached.signal : AbortSignal.any([signal, detached.signal])
+    await dispatcher.dispatch(
+      {
+        session: agent.session,
+        cwd: ctx.workingDirectory.get(agent.session),
+        agentId: agent.id,
+        // No turn exists yet: the event fires before the agent is handed back.
+        turn: 0,
+        step: 0,
+        signal: ownerSignal,
+      },
+      sessionStartPlan(agent, source),
+    )
+    return undefined
+  })
+
+  // `step.start`: the waterfall every step passes through, including tool
+  // continuations (`messages` is empty there). `promptOf` is what separates a
+  // submitted prompt from a continuation.
+  ctx.on('agent/pre-step', async ({ agent, messages, turn, step, signal }, next): Promise<PreStepDecision> => {
+    if (signal.aborted) return next()
+    const applied = await dispatcher.dispatch(
+      {
+        session: agent.session,
+        cwd: ctx.workingDirectory.get(agent.session),
+        agentId: agent.id,
+        turn,
+        step,
+        signal,
+      },
+      stepStartPlan(agent, messages, next),
+    )
+    return applied ?? next()
+  })
 
   ctx.on('tools/pre-execute', async (exec, next): Promise<PreToolDecision> => {
     const agent = exec.agent

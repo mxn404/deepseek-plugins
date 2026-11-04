@@ -30,9 +30,10 @@
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
+import { contextMessage } from './context.ts'
 import type { DispatchPlan } from './dispatch.ts'
+import { EVENT_ACTIONS } from './hook.ts'
 import type { MergedDecision } from './outcome.ts'
-import { contextMessage } from './tool-pre.ts'
 
 /** Reason used when a hook blocked the result without naming one. */
 const FALLBACK_BLOCK = 'blocked by a lifecycle hook'
@@ -54,9 +55,9 @@ export function toolPostPlan(
 ): DispatchPlan<PostToolDecision> {
   return {
     event: 'tool.post',
-    actions: ['block', 'replace', 'context', 'halt'],
+    actions: EVENT_ACTIONS['tool.post'],
     subject: {
-      match: { tool: exec.name, args: exec.arguments },
+      match: { kind: 'tool', tool: exec.name, args: exec.arguments },
       fields: {
         tool: { name: exec.name, call_id: exec.callId, input: exec.arguments },
         result: { is_error: result.isError, content: result.content },

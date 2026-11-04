@@ -1,15 +1,19 @@
 /**
- * Match clauses: which tool a hook speaks about, and which arguments.
+ * Match clauses: which tool a hook speaks about, which arguments, and whether
+ * a step carries a user prompt.
  *
- * A hook entry's `match` has two independent dimensions and either may be
- * omitted:
+ * A hook entry's `match` has three independent dimensions, each used by one
+ * event family, and any may be omitted:
  *
- * - `match.tool` — the tool name: a plain exact name, `name|other` for an
- *   either-or set, or `/regex/` for a pattern.
- * - `match.args` — a deep subset of the tool's parsed arguments. Objects match
- *   key by key and array elements match index by index; a string leaf is an
- *   exact value unless it is written as `/regex/`, which tests the actual
- *   string.
+ * - `match.tool` — the tool name on `tool.pre`: a plain exact name,
+ *   `name|other` for an either-or set, or `/regex/` for a pattern.
+ * - `match.args` — a deep subset of the tool's parsed arguments on `tool.pre`.
+ *   Objects match key by key and array elements match index by index; a string
+ *   leaf is an exact value unless it is written as `/regex/`, which tests the
+ *   actual string.
+ * - `match.prompt` — whether a `step.start` step carries a user prompt:
+ *   `true` selects submission steps, `false` continuation steps, and an
+ *   omitted clause selects every step.
  *
  * Everything here is pure so the format contract can be table-tested without a
  * host.
@@ -27,6 +31,8 @@ export type ToolPattern =
 export interface HookMatch {
   readonly tool: ToolPattern | undefined
   readonly args: Record<string, unknown> | undefined
+  /** `step.start` only: whether the step must carry a user prompt. */
+  readonly prompt?: boolean | undefined
 }
 
 /** `/body/` around a whole string, the only regex spelling this format has. */

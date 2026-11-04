@@ -14,7 +14,7 @@ import type { HookMatch } from './match.ts'
 
 /**
  * Lifecycle points the `.dsh/hooks.json` vocabulary names. This build
- * dispatches `tool.pre` and `tool.post`.
+ * dispatches the ones listed in {@link DispatchedHookEvent}.
  */
 export type HookEvent =
   | 'session.start'
@@ -27,18 +27,40 @@ export type HookEvent =
   | 'notification'
 
 /**
- * The lifecycle points this build actually dispatches. A later ticket widens
- * this union; `.dsh/hooks.json` still names the full vocabulary.
+ * Lifecycle points this build dispatches. A later ticket adds its event here
+ * and to {@link EVENT_ACTIONS}; the loader derives its supported set from that
+ * table, so an entry for any other named event is skipped with one warning.
  */
-export type SupportedHookEvent = Extract<HookEvent, 'tool.pre' | 'tool.post'>
+export type DispatchedHookEvent = 'session.start' | 'step.start' | 'tool.pre' | 'tool.post'
+
+/**
+ * Actions each dispatched event applies. This is the single authority the
+ * loader validates against and the dispatch plans read from, so an entry can
+ * never carry an action its event would silently ignore:
+ *
+ * - `session.start` only adds context — it fires before a turn exists, so it
+ *   has nothing to deny, halt, or ask about.
+ * - `step.start` denies the proposed step, adds context to it, or halts the
+ *   turn.
+ * - `tool.pre` denies the call, adds context for the next request, or halts
+ *   the turn.
+ * - `tool.post` blocks the result, replaces the model-visible content, adds
+ *   context for the next request, or halts the turn.
+ */
+export const EVENT_ACTIONS: Readonly<Record<DispatchedHookEvent, readonly HookAction[]>> = {
+  'session.start': ['context'],
+  'step.start': ['deny', 'context', 'halt'],
+  'tool.pre': ['deny', 'context', 'halt'],
+  'tool.post': ['block', 'replace', 'context', 'halt'],
+}
 
 /** Handler kinds the `.dsh/hooks.json` vocabulary names. */
 export type HookHandlerKind = 'builtin' | 'command' | 'module'
 
 /**
  * Actions the `.dsh/hooks.json` vocabulary names. This build executes `deny`,
- * `block`, `replace`, and `halt`; `context` is the outcome field every event
- * shares, and a builtin `inject` contributes one context line.
+ * `block`, `replace`, `context`, and `halt`; `continue` arrives with a later
+ * ticket, and `inject` is the builtin spelling of one context line.
  */
 export type HookAction =
   | 'deny'
@@ -50,6 +72,12 @@ export type HookAction =
   | 'inject'
   | 'replace'
 
+/** Actions a `builtin` handler can decide without running anything. */
+export type BuiltinAction = Extract<
+  HookAction,
+  'deny' | 'block' | 'replace' | 'inject' | 'context' | 'halt'
+>
+
 /**
  * Whether a failing hook lets the event through (`open`, the default) or turns
  * its failure into the event's blocking outcome (`block`).
@@ -60,27 +88,21 @@ export type HookFailurePolicy = 'open' | 'block'
  * A one-line builtin decision, applied without running anything.
  *
  * The spec's builtin vocabulary is `{action, reason?, text?}`: a blocking
- * action carries a `reason`, `inject` carries the reminder `text`, and
- * `replace` carries the model-visible `text` that replaces the tool result.
- * The event's own load gate decides which of them an entry may name.
+ * action carries a `reason`, `context` and `inject` carry the reminder `text`,
+ * and `replace` carries the model-visible `text` that replaces the tool
+ * result. The event's own load gate decides which of them an entry may name.
  */
 export type BuiltinRun =
   | {
       readonly type: 'builtin'
-      readonly action: 'deny' | 'block'
-      /** Model-facing reason; never empty. */
+      readonly action: Extract<BuiltinAction, 'deny' | 'block' | 'halt'>
+      /** Model-facing reason; the loader defaults it, so never empty. */
       readonly reason: string
     }
   | {
       readonly type: 'builtin'
-      readonly action: 'replace'
-      /** Model-visible replacement for the tool result's content. */
-      readonly text: string
-    }
-  | {
-      readonly type: 'builtin'
-      readonly action: 'inject'
-      /** One reminder line, folded into the event's context message. */
+      readonly action: Extract<BuiltinAction, 'replace' | 'inject' | 'context'>
+      /** Reminder line (`context`, `inject`) or replacement text (`replace`). */
       readonly text: string
     }
 
@@ -127,8 +149,8 @@ export interface Hook {
   /** Entry identity, unique within its file by convention and logged with every run. */
   readonly id: string
   /** Lifecycle point; one of the events this build dispatches. */
-  readonly on: HookEvent
-  /** Which calls it selects; `undefined` selects every call at that point. */
+  readonly on: DispatchedHookEvent
+  /** Which calls or steps it selects; `undefined` selects everything at that point. */
   readonly match: HookMatch | undefined
   /** What it does when it matches. */
   readonly run: HookHandler

@@ -14,25 +14,11 @@
  */
 
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import type { MessageSource } from '@deepseek-ai/dsh-llm'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
-import type { UserMessage } from '@deepseek-ai/dsh-session'
+import { contextMessage } from './context.ts'
 import type { DispatchPlan } from './dispatch.ts'
+import { EVENT_ACTIONS } from './hook.ts'
 import type { MergedDecision } from './outcome.ts'
-
-// The plugin's own message source: an injected reminder is attributable to
-// this plugin and to nothing else, which is the only attribution the model
-// surface keeps. The host treats an unknown kind as an ordinary user message,
-// so this declaration only has to hold for this package's own typecheck.
-declare module '@deepseek-ai/dsh-llm' {
-  interface MessageSourceMap {
-    'dsh-lifecycle-hooks': { kind: 'dsh-lifecycle-hooks' }
-  }
-}
-
-/** Source stamped on every context message this plugin injects. */
-export const CONTEXT_SOURCE: MessageSource = { kind: 'dsh-lifecycle-hooks' }
 
 /** Reason used when a hook blocked the call without naming one. */
 const FALLBACK_DENY = 'denied by a lifecycle hook'
@@ -49,9 +35,9 @@ const FALLBACK_HALT = 'halted by a lifecycle hook'
 export function toolPrePlan(exec: ToolExecution, agent: Agent): DispatchPlan<PreToolDecision> {
   return {
     event: 'tool.pre',
-    actions: ['deny', 'context', 'halt'],
+    actions: EVENT_ACTIONS['tool.pre'],
     subject: {
-      match: { tool: exec.name, args: exec.arguments },
+      match: { kind: 'tool', tool: exec.name, args: exec.arguments },
       fields: {
         tool: { name: exec.name, call_id: exec.callId, input: exec.arguments },
       },
@@ -67,21 +53,4 @@ export function toolPrePlan(exec: ToolExecution, agent: Agent): DispatchPlan<Pre
       return undefined
     },
   }
-}
-
-/**
- * Fold every hook's context into the one reminder message the model sees.
- *
- * Every event shares this shape: the plugin's own source kind, a user role, and
- * one `<system-reminder>` block whose lines are already in configuration order.
- * It is exported so later events reuse the fold instead of inventing a second
- * message shape the model would read differently.
- * @param context - the lines, already in configuration order.
- * @returns the user-role message to inject.
- */
-export function contextMessage(context: readonly string[]): UserMessage {
-  return createUserMessage({
-    content: [{ type: 'text', text: `<system-reminder>\n${context.join('\n')}\n</system-reminder>` }],
-    source: CONTEXT_SOURCE,
-  })
 }
