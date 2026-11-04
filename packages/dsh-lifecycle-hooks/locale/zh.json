@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "生命周期钩子",
-    "description": "随仓库提交的 .dsh/hooks.json 生命周期钩子：在 dsh 原生事件上拦截或询问工具调用、阻断或改写工具结果、注入会话与步骤上下文、让停下的 turn 再走一步；支持 builtin、command 与进程内 module，分层发现并热重载。"
+    "description": "用户 / 项目 / 本地三层的 .dsh/hooks.json 生命周期钩子：在 dsh 原生事件上拦截或询问工具调用、阻断或改写工具结果、注入会话与步骤上下文、让停下的 turn 再走一步；支持 builtin、command 与进程内 module，按 session 发现并热重载。"
   }
 }

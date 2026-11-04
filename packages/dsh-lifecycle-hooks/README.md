@@ -9,7 +9,7 @@ handler：一行 `builtin`、一个子进程 `command`、或一个进程内 `mod
 
 它是原生实现，不是桥：事件名、payload、outcome 都来自 dsh 的扩展点，**不复用** Claude Code
 的 `hook/*` 方言，也不读 `.claude/`。要跑现有 Claude Code hooks 请装
-`dsh-hooks-claude-code`；要跨 session 的通知/审计面板请看第三方 `dsh-hooks`（见
+`@deepseek-ai/dsh-hooks-claude-code`；要跨 session 的通知/审计面板请看第三方 `dsh-hooks`（见
 [与其它 hook 插件的区别](#与其它-hook-插件的区别)）。
 
 本插件实现 spec [#7](https://github.com/mxn404/deepseek-plugins/issues/7)。设计取舍见
@@ -96,7 +96,8 @@ overlay 里这一行的 `name` 要写成插件包的绝对路径，否则从仓�
 
 - `block-rm` 命中时工具**不执行**，模型收到的工具结果是 `Error: rm -rf is blocked by .dsh/hooks.json`。
 - `format-after-write` 指向 `.dsh/hooks/format.mjs`（路径相对**声明它的 hooks 文件所在目录**）。
-- `notify-approval` 在每次审批请求或 agent 错误时脱手跑一次，不参与任何决策。
+- `notify-approval` 在每次审批请求或 agent 错误时脱手跑一次，不参与任何决策；审批通知要求
+  该 session 的 agent 仍活着，agent 已销毁的审批请求会被跳过。
 
 没有 `.dsh/hooks.json` 的仓库零打扰：不注入消息、不打日志、不写记录。
 
@@ -365,7 +366,9 @@ export default async (ctx) => {
 3. `ask` —— 只在 `tool.pre` 生效；多个 ask 取第一条，不弹第二次。
 4. `continue` —— 只在 `turn.stop` 生效；所有 continue 的理由按顺序拼成**一条** steer 消息。
 5. `replace` —— 最后一个生效，后面的 hook 可以精修前面的替换。
-6. `context` —— 全部保留，按配置顺序拼接；即使 `block` / `deny` 胜出，context 也保留。
+6. `context` —— 全部保留，按配置顺序拼接；`tool.pre` 的 `deny` 和 `tool.post` 的
+   `block` / `replace` 胜出时仍会送达模型，但 `step.start` 的 `deny` 直接 reject 这一步
+   （context 无处落地），任何事件的 `halt` 也不注入 context。
 7. `meta` —— 不参与优先级；各 run 的审计文档按配置顺序最后一个生效，只写进合并结果与审计记录。
 
 事件不支持的 action 会 warn 一句并忽略，但保留它带的 context。同一事件点的全部 context
@@ -467,7 +470,7 @@ deny 本次调用，`tool.post` 的 halt 同时把该结果变成错误，模型
 
 ## 与其它 hook 插件的区别
 
-| | `dsh-lifecycle-hooks`（本插件） | 第三方 `dsh-hooks`（npm 0.14.x） | `dsh-hooks-claude-code` |
+| | `dsh-lifecycle-hooks`（本插件） | 第三方 `dsh-hooks`（npm 0.14.x） | `@deepseek-ai/dsh-hooks-claude-code` |
 |---|---|---|---|
 | 定位 | 仓库级的**阻塞 / 改写**运行时 | 跨 session 的**通知 / 审计**运行时 | Claude Code 方言兼容层 |
 | 配置位置 | 仓库 `.dsh/hooks.json` + 用户级三层 | profile 配置 | CC 的 `configPath`（进程级） |
@@ -483,7 +486,7 @@ deny 本次调用，`tool.post` 的 halt 同时把该结果变成错误，模型
 - 想让**团队规则随仓库提交**、在工具执行前拦截、在结果回到模型前脱敏、在 stop 前跑测试 →
   本插件。
 - 想要**跨项目的通知汇总 / 审计面板**、不想让 hook 影响 agent 循环 → 第三方 `dsh-hooks`。
-- 手上已有 `.claude/settings.json` 的 hooks，需要它们继续跑 → `dsh-hooks-claude-code`；
+- 手上已有 `.claude/settings.json` 的 hooks，需要它们继续跑 → `@deepseek-ai/dsh-hooks-claude-code`；
   本插件**故意**不复用 `hook/*` 事件，两者可以同时安装，但不要为同一条规则配两遍。
 
 ## 已接受的盲区

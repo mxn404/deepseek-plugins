@@ -11,7 +11,8 @@
 - 用户级、项目级、local 三层**全部自动发现**，不区分「可信 / 不可信仓库」，也没有首次
   运行的确认。
 - 不维护 allowlist、不记录信任决定、不引入项目身份（remote URL、commit、路径）作为键。
-- 行配置里的 `projectHooks` / `localHooks` 是**唯一**的开关：关掉即只跑用户级。
+- 行配置里的 `projectHooks` / `localHooks` 是两个**独立**开关：只关 `projectHooks` 时
+  local 层仍然生效，两个都关才只跑用户级；`userHooks` 单独控制用户级文件。
 - 不提供 sandbox：command 走宿主 `ctx.shell`（执行器负责凭据擦洗与超时/进程组），module
   在宿主进程内。两者都没有文件系统或网络隔离。
 
@@ -37,8 +38,9 @@
   事件立即生效，不存在缓存的信任决定。
 - **审计能定位来源**：每次运行写 `source`（配置文件绝对路径）与 `hook_id`。事后能看出是哪
   一层、哪一条跑了；但审计不能阻止运行。
-- **关掉 projectHooks 是唯一防线**：`localHooks` 同理；用户级文件仍生效。关掉后项目规则
-  完全消失，不会以「未信任」的名义半开。
+- **关掉两个项目开关才是完整防线**：`projectHooks` 只停掉 `.dsh/hooks.json`，同目录的
+  `.dsh/hooks.local.json` 仍由 `localHooks` 控制；两个都关掉后仓库层的规则才完全消失，不会
+  以「未信任」的名义半开。用户级文件由 `userHooks` 单独控制。
 - **两个执行面风险不同**：command 至少经过 shell 执行器的超时、进程组终止与凭据擦洗；
   module 是进程内普通 JS，能与插件、宿主共享权限（见 README 的「已接受的盲区」）。
 
