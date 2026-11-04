@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Lifecycle Hooks",
+    "description": "Layered .dsh/hooks.json lifecycle hooks (user, project, and local) on native dsh lifecycle events: deny or ask before a tool runs, block or rewrite tool results, inject session and step context, and continue a stopping turn — from builtin, command, or in-process module handlers, with per-session discovery and hot reload."
+  }
+}
