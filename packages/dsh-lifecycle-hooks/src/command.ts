@@ -23,6 +23,10 @@
  * `ctx.shell` owns the timeout, the process-group kill, the credential scrub,
  * and the output caps; this module never spawns directly.
  *
+ * The outcome vocabulary is validated by {@link decodeDecision}, which the
+ * `module` handler shares: a module's return value is the same document a
+ * script writes to stdout, validated once.
+ *
  * @module dsh-lifecycle-hooks/command
  */
 
@@ -82,7 +86,7 @@ export interface CommandResult {
 }
 
 /**
- * Decode a command's stdout into an outcome.
+ * Decode one command's stdout into an outcome.
  *
  * Total: a malformed document becomes a failure description, never a throw.
  * @param stdout - the process's captured standard output.
@@ -97,7 +101,20 @@ export function decodeOutcome(stdout: string): CommandDecode {
   } catch (error) {
     return { decision: undefined, error: `stdout is not a single JSON outcome: ${messageOf(error)}` }
   }
-  if (!isRecord(raw)) return { decision: undefined, error: 'stdout must be a JSON object' }
+  return decodeDecision(raw)
+}
+
+/**
+ * Validate one outcome value.
+ *
+ * Both handler kinds speak the same document — a command through its stdout and
+ * a module through its return value — so the validation lives here once.
+ * @param raw - the parsed value.
+ * @param subject - what produced it, for the failure message (`stdout`, `module result`).
+ * @returns the decoded decision plus any protocol error.
+ */
+export function decodeDecision(raw: unknown, subject = 'stdout'): CommandDecode {
+  if (!isRecord(raw)) return { decision: undefined, error: `${subject} must be a JSON object` }
 
   let action: HookAction | undefined
   if (raw.action !== undefined) {

@@ -217,6 +217,54 @@ describe('the hooks file schema', () => {
     expect(parsed.hooks[0]?.run).toEqual({ type: 'command', command: 'echo noted', async: true })
   })
 
+  it('accepts a module handler and keeps its path relative to the hooks file', () => {
+    const parsed = hooksOf(JSON.stringify({
+      version: 1,
+      hooks: [{
+        id: 'format',
+        on: 'tool.post',
+        match: { tool: 'write|edit' },
+        run: { type: 'module', path: '.dsh/hooks/format.mjs' },
+        timeoutMs: 60_000,
+      }],
+    }))
+    expect(parsed.warnings).toEqual([])
+    expect(parsed.hooks[0]).toEqual({
+      id: 'format',
+      on: 'tool.post',
+      match: { tool: { kind: 'alternatives', names: ['write', 'edit'] }, args: undefined },
+      run: { type: 'module', path: '.dsh/hooks/format.mjs', async: false },
+      timeoutMs: 60_000,
+      onFailure: 'open',
+    })
+  })
+
+  it('accepts a detached module handler', () => {
+    const parsed = hooksOf(JSON.stringify({
+      version: 1,
+      hooks: [{
+        id: 'notify',
+        on: 'tool.post',
+        run: { type: 'module', path: '.dsh/hooks/notify.js', async: true },
+      }],
+    }))
+    expect(parsed.warnings).toEqual([])
+    expect(parsed.hooks[0]?.run).toEqual({ type: 'module', path: '.dsh/hooks/notify.js', async: true })
+  })
+
+  it('forces a module handler on an observe-only event detached', () => {
+    const parsed = hooksOf(JSON.stringify({
+      version: 1,
+      hooks: [{
+        id: 'audit',
+        on: 'tool.result',
+        run: { type: 'module', path: '.dsh/hooks/audit.mjs' },
+      }],
+    }))
+    expect(parsed.warnings).toEqual([])
+    expect(parsed.hooks[0]?.run).toEqual({ type: 'module', path: '.dsh/hooks/audit.mjs', async: true })
+  })
+
   it('accepts a builtin continue on turn.stop', () => {
     const parsed = hooksOf(JSON.stringify({
       version: 1,
@@ -290,9 +338,29 @@ describe('the hooks file schema', () => {
     ],
     ['a missing run', { id: 'a', on: 'tool.pre' }, '"run"'],
     [
-      'a module handler',
-      { id: 'a', on: 'tool.pre', run: { type: 'module', path: '.dsh/hooks/gate.mjs' } },
-      'not supported by this build',
+      'a module with no path',
+      { id: 'a', on: 'tool.pre', run: { type: 'module' } },
+      '"run.path"',
+    ],
+    [
+      'a module with an empty path',
+      { id: 'a', on: 'tool.pre', run: { type: 'module', path: '  ' } },
+      '"run.path"',
+    ],
+    [
+      'a TypeScript module',
+      { id: 'a', on: 'tool.pre', run: { type: 'module', path: '.dsh/hooks/gate.ts' } },
+      '.mjs or .js',
+    ],
+    [
+      'a module with an unknown extension',
+      { id: 'a', on: 'tool.pre', run: { type: 'module', path: '.dsh/hooks/gate.wasm' } },
+      '.mjs or .js',
+    ],
+    [
+      'a non-boolean module async flag',
+      { id: 'a', on: 'tool.pre', run: { type: 'module', path: '.dsh/hooks/gate.mjs', async: 'yes' } },
+      '"run.async"',
     ],
     [
       'a command with no command string',

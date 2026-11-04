@@ -7,9 +7,11 @@
 内容（脱敏 / 裁剪），`block` 把结果变成错误反馈，`context` 给模型补一句提醒。会话开始、
 每一步开始、以及 turn 自然停下时也能挂规则：注入上下文、按用户 prompt 拒绝一步、或用
 `continue` 让停下的 turn 再走一步。需要更复杂的判断时，每个事件点都能跑一条 `command`：
-脚本从 stdin 读 JSON、往 stdout 写一个 JSON outcome。
+脚本从 stdin 读 JSON、往 stdout 写一个 JSON outcome；也可以指向一个进程内的 `module`，
+直接拿到活的 agent / session / tool / result，用 `exec()` 跑命令、用 `inject()` / `steer()`
+给模型递话。
 
-本插件实现 spec [#7](https://github.com/mxn404/deepseek-plugins/issues/7) 的前八刀：
+本插件实现 spec [#7](https://github.com/mxn404/deepseek-plugins/issues/7) 的前九刀：
 [#8](https://github.com/mxn404/deepseek-plugins/issues/8) 的最小工具门禁（walking skeleton）、
 [#9](https://github.com/mxn404/deepseek-plugins/issues/9) 的分层发现 / 热重载、
 [#10](https://github.com/mxn404/deepseek-plugins/issues/10) 的 command handler 与 `tool.pre`
@@ -19,13 +21,14 @@
 [#12](https://github.com/mxn404/deepseek-plugins/issues/12) 的 `session.start` / `step.start`
 与 `match.prompt`、
 [#13](https://github.com/mxn404/deepseek-plugins/issues/13) 的 `turn.stop` 继续与 loop guard、
-[#14](https://github.com/mxn404/deepseek-plugins/issues/14) 的 `tool.pre` `ask` 审批门禁，以及
+[#14](https://github.com/mxn404/deepseek-plugins/issues/14) 的 `tool.pre` `ask` 审批门禁、
 [#15](https://github.com/mxn404/deepseek-plugins/issues/15) 的子 agent 覆盖与
-`tool.result` / `session.end` / `notification` 三个只观察事件。
-后续票在同一套 dispatcher、配置 schema、发现与 e2e harness 上补齐 `module` handler；
+`tool.result` / `session.end` / `notification` 三个只观察事件，以及
+[#16](https://github.com/mxn404/deepseek-plugins/issues/16) 的进程内 `module` handler。
 目前打通 `session.start`、`step.start`、`tool.pre`、`tool.post`、`turn.stop` 五个可决策
-事件点，外加 `tool.result`、`session.end`、`notification` 三个只观察事件点，`ask` 只在
-`tool.pre` 生效。
+事件点，外加 `tool.result`、`session.end`、`notification` 三个只观察事件点；`ask` 只在
+`tool.pre` 生效。五个可决策事件点都能跑 `builtin`、`command` 或 `module`；三个只观察事件点
+只接受脱手运行的 `command` / `module`，builtin 条目在加载时跳过。
 
 ## 它做什么
 
@@ -66,6 +69,12 @@
   坏 JSON、`replace.value`、超时都按运行失败处理（默认放行，见 `onFailure`），超时由 shell
   执行器杀掉整个进程组。`async: true` 的条目脱手执行，只做副作用、不参与决策，插件销毁时会被
   中止。
+- **模块**：`{ "type": "module", "path": "hooks/format.mjs" }` 在宿主进程内加载一个 ESM 模块，
+  默认导出就是 hook：`(ctx) => outcome | void | Promise<…>`。`ctx` 只有策展 API，拿不到
+  Cordis `Context`，也拿不到插件内部；返回值与 command 的 stdout 走同一套校验 / 合并 / apply。
+  路径相对**声明它的 hooks 文件所在目录**，只认 `.mjs` / `.js`；文件缺失、读不了、没有
+  default export 都只是这一次运行失败（按 `onFailure` 处理），不会让插件崩。详见
+  [module handler](#module-handler)。
 - **会话与步骤**：`session.start` 在宿主 `agent/created` 里被 await，context 通过
   `agent.inject` 停进 next-step inbox，第一个 `agent/pre-step` 会把它 claim 进首批消息——所以
   注入出现在**首个**模型请求里，不是 best-effort。`step.start` 在 `agent/pre-step` 上按
@@ -79,8 +88,8 @@
   不接受 `halt`（halt 只属于阻塞事件），非法 action 被忽略并 warn。
 - **只观察事件**：`tool.result`（宿主 `tools/result`，在最终结果冻结后触发）、`session.end`
   （`agent/disposed`）与 `notification`（从持久的 `approval/asked` 与 Cordis `agent/error` 派生）
-  只报告已经发生的事，没有可决策的 outcome：`command` 在这些事件上**一律脱手执行**（写不写
-  `async: true` 都一样），`builtin` 条目在加载时被跳过并 warn。`tool.result` 的 payload 带最终
+  只报告已经发生的事，没有可决策的 outcome：`command` 与 `module` 在这些事件上**一律脱手执行**
+  （写不写 `async: true` 都一样），`builtin` 条目在加载时被跳过并 warn。`tool.result` 的 payload 带最终
   `tool` 与 `result`，脚本改写结果不会生效并 warn；`session.end` 的 payload 带最后一个已关闭
   turn 的 `turn` 与 `reason`（`completed` / `aborted` / `error` 等），observer 不阻塞 disposal，
   插件销毁时由 detached tracker 兜底中止；`notification` 的 payload 是
@@ -186,6 +195,13 @@
       "timeoutMs": 2000
     },
     {
+      "id": "format-after-write",
+      "on": "tool.post",
+      "match": { "tool": "write|edit" },
+      "run": { "type": "module", "path": "hooks/format.mjs" },
+      "timeoutMs": 60000
+    },
+    {
       "id": "redact-token",
       "on": "tool.post",
       "match": { "tool": "bash|read" },
@@ -225,15 +241,16 @@
 | `hooks[].id` | 是 | 非空字符串，审计记录用它标识条目 |
 | `hooks[].on` | 是 | 事件名；本版调度 `session.start` / `step.start` / `tool.pre` / `tool.post` / `tool.result` / `turn.stop` / `session.end` / `notification` |
 | `hooks[].match` | 否 | 省略 = 全匹配；`tool` 与 `args` 是工具事件的两条独立约束，`prompt` 属于 `step.start` |
-| `hooks[].run` | 是 | handler；`builtin`（`{ "type": "builtin", "action": "…", "reason": "…", "text": "…" }`）或 `command`（`{ "type": "command", "command": "…", "async": false }`） |
+| `hooks[].run` | 是 | handler；`builtin`（`{ "type": "builtin", "action": "…", "reason": "…", "text": "…" }`）、`command`（`{ "type": "command", "command": "…", "async": false }`）或 `module`（`{ "type": "module", "path": "…", "async": false }`） |
 | `hooks[].run.command` | command 必填 | shell 命令行，cwd 是 session 当前目录 |
-| `hooks[].run.async` | 否 | `true` 时脱手执行：只做副作用、不参与决策，销毁时中止；`tool.result` / `session.end` / `notification` 上的 command 一律强制脱手 |
+| `hooks[].run.path` | module 必填 | 模块路径，相对声明它的 hooks 文件所在目录；只认 `.mjs` / `.js` |
+| `hooks[].run.async` | 否 | `true` 时脱手执行：只做副作用、不参与决策，销毁时中止（`command` 与 `module` 都支持）；`tool.result` / `session.end` / `notification` 上的 command 一律强制脱手 |
 | `hooks[].timeoutMs` | 否 | 正整数，覆盖行配置的 `defaultTimeoutMs` |
 | `hooks[].onFailure` | 否 | `open`（默认，失败放行）或 `block`（失败按事件合成阻断） |
 
 不认识的字段静默忽略。`on`、`run.type`、`run.action` 的完整词汇属于 spec，但本版只调度
-上面八个事件、只执行 `builtin` 与 `command`，并且每个事件只接受自己的动作（三个只观察事件
-不接受任何 builtin 动作）：
+上面八个事件、只执行 `builtin`、`command` 与 `module`，并且每个事件只接受自己的动作（三个只观察
+事件不接受任何 builtin 动作）：
 
 | 事件 | builtin 可用动作 | 写法 |
 |---|---|---|
@@ -246,7 +263,7 @@
 | `tool.post` | `replace` | `{ "action": "replace", "text": "…" }` |
 | `tool.post` | `inject` | `{ "action": "inject", "text": "…" }` |
 | `turn.stop` | `continue` | `{ "action": "continue", "reason": "…" }`（reason 可省） |
-| `tool.result` / `session.end` / `notification` | 无 | 只观察；用 `command` handler，写了 builtin 会在加载时跳过并 warn |
+| `tool.result` / `session.end` / `notification` | 无 | 只观察；用 `command` 或 `module` handler（一律强制脱手），写了 builtin 会在加载时跳过并 warn |
 
 `tool.pre` 的 builtin 接受 `deny` 与 `ask`；command handler 在该事件上还可报 `context` /
 `halt`，builtin 的 `replace` / `block` / `context` 仍未开放。`ask` 只在这个事件合法：其他
@@ -260,12 +277,80 @@ command 的 `{ "replace": { "text": "…" } }`。`ask` 还可以带 `displayReas
 action 带它没有意义，会被解码后忽略。每个事件的 command 运行时 outcome 支持
 `action` / `reason` / `context` / `replace` 的任意合法组合；事件不支持的 action 只 warn 并忽略。
 
-写了别的合法值会 warn 一句 “not supported by this build” 并跳过该条（command 在运行时输出的
+写了别的合法值（例如 `.dsh/hooks.json` 里的 `ask`、尚未调度的事件、`.ts` 模块）会 warn 一句
+“not supported by this build” 并跳过该条（command 在运行时输出的
 非法 action 则 warn 一句「event 不支持」并忽略该动作，保留 context），不会让整份文件失效。
 
 匹配边界（都按 JSON 值判，不做字符串化）：`match.tool` 的 `/…/` 是**未锚定**的正则，需要整名
 匹配时自己写 `^…$`；`match.args` 的深子集只检查写出来的 key，实际参数里多出来的 key 不影响
 命中；数组按**下标前缀**比较，实际数组更短才算不匹配。
+
+## module handler
+
+```jsonc
+// .dsh/hooks.json
+{
+  "id": "format-after-write",
+  "on": "tool.post",
+  "match": { "tool": "write|edit" },
+  "run": { "type": "module", "path": "hooks/format.mjs" },
+  "timeoutMs": 60000,
+  "onFailure": "block"
+}
+```
+
+```js
+// .dsh/hooks/format.mjs —— 与 .dsh/hooks.json 同目录下的 hooks/
+import { writeFileSync } from 'node:fs'
+
+export default async (ctx) => {
+  const path = ctx.tool.input.file_path
+  const result = await ctx.exec(`node .dsh/hooks/tidy.mjs ${path}`)
+  if (result.exitCode !== 0) {
+    // 返回值就是 outcome，和 command 的 stdout 同一套词汇
+    return { action: 'block', reason: 'formatter failed: ' + result.stderr }
+  }
+  ctx.inject('the hook formatted ' + path)
+  ctx.log('formatted ' + path)
+  return { context: ['the formatter rewrote this file'] }
+}
+```
+
+`ctx` 就是全部可用的东西，没有别的：
+
+| 字段 | 说明 |
+|---|---|
+| `event` | 事件名，与 payload 里的 `event` 相同 |
+| `payload` | 事件 payload，和 command 从 stdin 读到的是同一份（`time` / `session_id` / `cwd` / `agent_id` / `turn` / `step` / `source` / `hook_id` / `tool` / `result`） |
+| `agent` | 这个事件所属的活 agent（`inject` / `steer` / `cancel` …） |
+| `session` | 活 Session，审计记录也写在这里 |
+| `tool` | 有工具的事件上为 `{ name, call_id, input }`，否则 `undefined` |
+| `result` | 带结果的事件上为 `{ is_error, content }`，否则 `undefined` |
+| `signal` | 事件被放弃或本条超时后 abort；不响应它的模块会继续跑完 |
+| `log(message)` | 走宿主 logger，前缀 `dsh-lifecycle-hooks: module "<id>" at <event>: `，不进模型 |
+| `inject(text)` | 给下一步塞一条 `<system-reminder>`（同 `src/context.ts` 渲染器）；返回是否送达 |
+| `steer(text)` | 用一条 `<system-reminder>` 唤醒下一步；返回是否送达 |
+| `exec(command, options?)` | 走宿主 `ctx.shell`：cwd 是 session 当前目录，signal 是事件 signal（加上本条超时）；`options` 可带 `timeoutMs` / `env` / `stdin` |
+| `handler` | 这条 hook 自己的 `{ id, event, source }` |
+
+`exec` 把失败当数据返回，不抛异常：`{ exitCode, stdout, stderr, timedOut, aborted, disabled }`。
+`exitCode` 为 `null` 表示进程没给出退出码（起不来、被杀）；`disabled: true` 表示这次运行已经结束
+（超时 / 取消 / 模块已返回），命令**根本没有启动**。模板字符串拼命令会经过 shell，需要转义时
+自己引用参数。
+
+模块的生命周期：
+
+- **改了就重载**：每次运行先 `stat` 文件，把 `mtimeMs` 拼进 import URL（`?v=<mtimeMs>`），所以改
+  完模块后**下一次事件**就是新代码；先失败后补上文件也一样，下一次事件就能加载。
+- **超时**：条目 `timeoutMs` 优先，否则行 `defaultTimeoutMs`。超时（或事件被取消）后本次运行立刻
+  记为失败、按 `onFailure` 处理，并**关闭 `inject` / `steer` / `exec`**：晚到的副作用落不到任何
+  地方。模块自身的 `import { writeFileSync }` 不经过 helper，仍会执行——所以不要写「超时后再补一
+  刀」的模块。**不响应 signal、也一直不 resolve 的模块无法强杀**：它是宿主进程里的普通 JS。
+- **脱手**：`async: true` 的模块不被事件等待、不参与决策，副作用与审计照旧；插件销毁时它的
+  signal 会被 abort。和 command 一样，这是通知 / 记账用的，不是决策用的。
+- **失败**：模块缺失 / 读不了 / import 抛错 / 没有 default export / 模块抛错 / 超时，都是这一次
+  运行失败。默认 fail open；`onFailure: "block"` 时按事件合成阻断（`tool.pre` / `step.start` →
+  deny，`tool.post` → block）。
 
 ## 审计记录
 
@@ -312,13 +397,19 @@ pnpm --dir /home/ubuntu/code/deepseek-harness dsh --profile dev --dump-config   
 
 这些是这一刀接受的边界，不是待修的缺陷：
 
-- **只覆盖八个事件**：`module` handler 还没实现，配置文件里合法地写了它只会被跳过并 warn。
-  `ask` 只在 `tool.pre` 生效，其他事件返回它会被剥掉。
 - **只观察事件是 best-effort**：`session.end` 在 `agent/disposed` 上脱手运行，不阻塞 disposal；
   进程整体退出、或插件比 agent 先销毁时，这次运行会被 detached tracker 中止，可能只留下一条
   失败记录。`tool.result` 与 `notification` 同理，都是事件已经提交之后的旁路。
 - **`notification` 没有 match 维度**：不能只订阅 approval 或只订阅某类错误；一条条目会在每次
   approval/asked 与 agent/error 上运行，脚本自己按 payload 的 `type` / `tool_name` 分支。
+- **module 在宿主进程内**：模块与插件、宿主共享同一个进程和权限——能读环境变量、能写任何文件，
+  没有 sandbox、没有 worker 隔离（spec 明确不做）。只认 `.mjs` / `.js`，不认 TypeScript；`.js`
+  按最近的 `package.json` 的 `type` 解释，没有 `type: "module"` 的仓库里写 `export` 会是语法
+  错误。超时后 helper 全部失效，但那段 JS 仍会跑完；改模块后旧版本留在 ESM 模块表里（拿不到
+  引用，也无法卸载），长 session 里反复改大模块有一点内存代价。
+- **module 路径相对 hooks 文件**：`.dsh/hooks.json` 在 `.dsh/` 里，所以字符串写
+  `hooks/format.mjs` 而不是 `.dsh/hooks/format.mjs`；用户级 `~/.dsh/hooks.json` 同理相对
+  `~/.dsh/`。
 - **`tool.post` 不能阻止副作用**：hook 在工具执行后才运行，`block` / `replace` 只改变模型读到
   的结果；工具写下的文件、发出的请求都已经发生。要在执行前拦截，用 `tool.pre` 的 `deny`。
 - **`replace` 只能换模型可见内容**：宿主的 `value` 是执行期 schema 内 JSON、从不落盘，也无法

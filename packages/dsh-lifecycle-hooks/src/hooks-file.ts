@@ -16,6 +16,7 @@
  */
 
 import { readFile, stat } from 'node:fs/promises'
+import { extname } from 'node:path'
 import type { DispatchedHookEvent, Hook, HookAction, HookEvent } from './hook.ts'
 import { EVENT_ACTIONS, isObserveOnly } from './hook.ts'
 import { compileToolPattern, invalidArgPattern, isRecord, type HookMatch } from './match.ts'
@@ -285,7 +286,7 @@ function parseRun(raw: unknown, event: DispatchedHookEvent): RunParse {
     case 'command':
       return parseCommandRun(raw, event)
     case 'module':
-      return { error: 'handler type "module" is not supported by this build' }
+      return parseModuleRun(raw, event)
     default:
       return { error: `unknown handler type "${raw.type}"` }
   }
@@ -379,6 +380,45 @@ function parseCommandRun(raw: Record<string, unknown>, event: DispatchedHookEven
     run: {
       type: 'command',
       command: raw.command,
+      async: isObserveOnly(event) || raw.async === true,
+    },
+  }
+}
+
+/**
+ * Parse a `module` run: the in-process ESM module and its detachment flag.
+ *
+ * The path is validated, not resolved: it is relative to the hooks file that
+ * names it, and parsing does not know which file that was. Only `.mjs` and
+ * `.js` are accepted — a `.ts` file would need a loader this build does not
+ * carry, and silently importing it as JavaScript would fail at run time with a
+ * much worse message.
+ *
+ * An observe-only event forces `async` on, for the same reason a command does:
+ * the event has already committed what it reports, so its handler must never
+ * participate in a decision.
+ * @param raw - the entry's `run` value, known to be an object.
+ * @param event - the lifecycle point the entry is bound to.
+ * @returns the executable run, or the reason the entry must be dropped.
+ */
+function parseModuleRun(raw: Record<string, unknown>, event: DispatchedHookEvent): RunParse {
+  if (typeof raw.path !== 'string' || raw.path.trim().length === 0) {
+    return { error: '"run.path" must be a non-empty string' }
+  }
+  const extension = extname(raw.path)
+  if (extension !== '.mjs' && extension !== '.js') {
+    return {
+      error: '"run.path" must be a .mjs or .js module'
+        + ' (TypeScript modules are not supported by this build)',
+    }
+  }
+  if (raw.async !== undefined && typeof raw.async !== 'boolean') {
+    return { error: '"run.async" must be a boolean' }
+  }
+  return {
+    run: {
+      type: 'module',
+      path: raw.path,
       async: isObserveOnly(event) || raw.async === true,
     },
   }

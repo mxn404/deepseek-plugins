@@ -8,7 +8,9 @@
  * event only supplies a {@link DispatchPlan}: what it matches, what it puts in
  * the payload, which actions it supports, and how the decision reaches the host
  * seam. This build registers a plan for `session.start`, `step.start`,
- * `tool.pre`, `tool.post`, and `turn.stop`.
+ * `tool.pre`, `tool.post`, `tool.result`, `turn.stop`, `session.end`, and
+ * `notification`; the last three are observe-only and dispatch detached runs
+ * that can never contribute a decision.
  *
  * Two rules are enforced here for every event:
  *
@@ -21,6 +23,7 @@
  * @module dsh-lifecycle-hooks/dispatch
  */
 
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
 import { recordHookRun } from './audit.ts'
 import type { DetachedRuns } from './detached.ts'
@@ -28,6 +31,7 @@ import type { HookResolver, ResolvedHooks } from './discovery.ts'
 import type { HookRun, HandlerShell } from './handler.ts'
 import { executeHook } from './handler.ts'
 import type { Hook, HookAction, HookEvent } from './hook.ts'
+import { isDetached } from './hook.ts'
 import type { HookMatch } from './match.ts'
 import { matchesHook } from './match.ts'
 import type { MergedDecision } from './outcome.ts'
@@ -43,6 +47,11 @@ export interface DispatchCall {
   readonly cwd: string
   /** Agent the event belongs to. */
   readonly agentId: string
+  /**
+   * The live agent, for the handler kinds that act on it directly (a module's
+   * `inject`, `steer`, and `exec` helpers).
+   */
+  readonly agent: Agent
   /** Turn number of the latest opened turn. */
   readonly turn: number
   /** Step number of the latest opened step. */
@@ -59,8 +68,9 @@ export interface DispatchCall {
 /**
  * The match dimensions one event offers its hooks.
  *
- * `session.start` has none, both tool events have a tool and its arguments, and
- * `step.start` has the presence of a user prompt. The loader rejects a `match`
+ * `session.start`, `turn.stop`, `session.end`, and `notification` have none,
+ * the three tool events have a tool and its arguments, and `step.start` has
+ * the presence of a user prompt. The loader rejects a `match`
  * dimension the event does not offer, so selection only ever consults the
  * dimension the event hands over.
  */
@@ -108,6 +118,8 @@ export interface HookDispatcherOptions {
   readonly detached: DetachedRuns
   /** Whether runs append a plugin record to the Session log. */
   readonly audit: boolean
+  /** Logger sink for a module handler's own `log` lines. */
+  readonly log: (message: string) => void
   /** Warning sink; the owner adds the plugin-name prefix. */
   readonly warn: (message: string) => void
   /** Called after each resolve, so the owner can retarget a Session's watcher. */
@@ -147,7 +159,7 @@ export class HookDispatcher {
       for (const hook of layer.hooks) {
         if (hook.on !== plan.event) continue
         if (!selects(hook.match, plan.subject.match)) continue
-        if (hook.run.type === 'command' && hook.run.async) {
+        if (isDetached(hook.run)) {
           // Detached: never awaited, never merged, still audited and cancelled
           // on disposal.
           this.options.detached.track(this.runDetached(hook, layer.source, call, plan))
@@ -196,10 +208,12 @@ export class HookDispatcher {
     }
     return executeHook(hook, source, {
       shell: this.options.shell(),
+      agent: call.agent,
       payload: commandPayload(facts, plan.subject.fields),
       env: commandEnv(facts),
       workdir: call.cwd,
       signal,
+      log: this.options.log,
     })
   }
 

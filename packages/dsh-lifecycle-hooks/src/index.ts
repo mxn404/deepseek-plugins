@@ -11,14 +11,14 @@
  * context for the next request, or halt),
  * `tool.post` (block, replace, or context after the tool ran), and `turn.stop`
  * (steer a stopping turn on for one more step), each through the same merge of
- * `builtin` and `command` outcomes. It also dispatches the observe-only
- * `tool.result`, `session.end`, and `notification` (derived from an approval
- * ask or an agent error): those run detached and leave an audit row, but can
- * never decide anything.
+ * `builtin`, `command`, and `module` outcomes. It also dispatches the
+ * observe-only `tool.result`, `session.end`, and `notification` (derived from
+ * an approval ask or an agent error): those run detached and leave an audit
+ * row, but can never decide anything.
  *
  * The wiring here is deliberately thin. Discovery lives in `discovery.ts`,
  * reading and validating one hooks file in `hooks-file.ts`, matching in
- * `match.ts`, execution in `handler.ts` / `command.ts`, the per-event payload in
+ * `match.ts`, execution in `handler.ts` / `command.ts` / `module.ts`, the per-event payload in
  * `payload.ts`, the single resolve→run→record→merge→apply pipeline in
  * `dispatch.ts`, the decision ranking in `outcome.ts`, the events' plans in
  * `session-start.ts` / `step-start.ts` / `tool-pre.ts` / `tool-post.ts` /
@@ -32,7 +32,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
+import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-projection'
 import type { PostToolDecision, PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
@@ -64,6 +64,14 @@ export const inject = ['workingDirectory']
 
 export { Config }
 export type { Config as HooksConfig }
+// The curated surface a hook module receives, published for authors who write
+// their `.mjs` module in TypeScript before compiling it.
+export type {
+  ModuleContext,
+  ModuleExecOptions,
+  ModuleExecResult,
+  ModuleHandlerInfo,
+} from './module.ts'
 
 /**
  * Mount the host half.
@@ -73,6 +81,12 @@ export type { Config as HooksConfig }
 export function apply(ctx: Context, config: Config): void {
   const warn = (message: string): void => {
     ctx.logger.warn(`dsh-lifecycle-hooks: ${message}`)
+  }
+
+  // A module handler's `log` helper writes here, under the same name prefix:
+  // the hook author's line is attributable and never model-visible.
+  const log = (message: string): void => {
+    ctx.logger.info(`dsh-lifecycle-hooks: ${message}`)
   }
 
   const resolver = new HookResolver({
@@ -132,9 +146,16 @@ export function apply(ctx: Context, config: Config): void {
       // `approval/asked` is log-only: no Cordis event reports an ask, so the
       // durable append is the source of truth. The observer is detached, like
       // every notification, and cannot affect the pending decision.
+      //
+      // The event carries only the Session, so the live Agent comes from the
+      // registry: agent id and Session id are the same identity. A Session
+      // whose Agent is already gone has nothing left to observe, so the
+      // notification is skipped rather than dispatched agentless.
+      const agent = ctx.get('agents')?.get(session.header.id)
+      if (agent === undefined) return
       const ask = event.data
       detached.track(dispatcher.dispatch(
-        observeCall(session),
+        observeCall(agent),
         notificationPlan(approvalNotification({
           toolName: ask.toolName,
           ...ask.reason === undefined ? {} : { reason: ask.reason },
@@ -164,6 +185,7 @@ export function apply(ctx: Context, config: Config): void {
     detached,
     audit: config.audit,
     warn,
+    log,
     onResolve: (session, directories) => {
       // Keep the watcher aligned with the committed cwd even when no hooks
       // exist yet: a layer created mid-session must become visible on the next
@@ -190,6 +212,7 @@ export function apply(ctx: Context, config: Config): void {
       session: agent.session,
       cwd: ctx.workingDirectory.get(agent.session),
       agentId: agent.id,
+      agent,
       turn: ctx.get('sessionProjections')?.stateOf(agent.session, 'turnBoundary')?.lastTurn ?? 0,
       step: steps.of(agent.session),
       signal: exec.signal,
@@ -202,19 +225,20 @@ export function apply(ctx: Context, config: Config): void {
    * The host has already committed what is being reported, so the run is
    * bounded by the plugin's own disposal signal rather than by the host's
    * (possibly aborted) call signal, and the listener never awaits it.
-   * @param session - the Session the observation belongs to.
+   * @param agent - the live Agent the observation belongs to.
    * @param turn - the turn the host named, when it named one.
    * @param step - the step the host named, when it named one.
    * @returns the dispatch call for one observation.
    */
-  const observeCall = (session: Session, turn?: number, step?: number) => ({
-    session,
-    cwd: ctx.workingDirectory.get(session),
-    // Agent id and Session id are the same identity (`agent.id === session.id`),
-    // which keeps the payload usable when only a Session is in hand.
-    agentId: session.header.id,
-    turn: turn ?? ctx.get('sessionProjections')?.stateOf(session, 'turnBoundary')?.lastTurn ?? 0,
-    step: step ?? steps.of(session),
+  const observeCall = (agent: Agent, turn?: number, step?: number) => ({
+    session: agent.session,
+    cwd: ctx.workingDirectory.get(agent.session),
+    agentId: agent.id,
+    // Every observe seam hands over a live Agent except `approval/asked`, whose
+    // listener resolves it from the registry before calling this.
+    agent,
+    turn: turn ?? ctx.get('sessionProjections')?.stateOf(agent.session, 'turnBoundary')?.lastTurn ?? 0,
+    step: step ?? steps.of(agent.session),
     signal: detached.signal,
   })
 
@@ -231,6 +255,7 @@ export function apply(ctx: Context, config: Config): void {
         session: agent.session,
         cwd: ctx.workingDirectory.get(agent.session),
         agentId: agent.id,
+        agent,
         // No turn exists yet: the event fires before the agent is handed back.
         turn: 0,
         step: 0,
@@ -251,6 +276,7 @@ export function apply(ctx: Context, config: Config): void {
         session: agent.session,
         cwd: ctx.workingDirectory.get(agent.session),
         agentId: agent.id,
+        agent,
         turn,
         step,
         signal,
@@ -287,7 +313,7 @@ export function apply(ctx: Context, config: Config): void {
     const agent = exec.agent
     // Programmatic calls have no Session to resolve hooks or audit against.
     if (agent === undefined) return
-    detached.track(dispatcher.dispatch(observeCall(agent.session), toolResultPlan(exec, result)))
+    detached.track(dispatcher.dispatch(observeCall(agent), toolResultPlan(exec, result)))
   })
 
   // `session.end`: an emit during teardown. Never await it — disposal must not
@@ -305,7 +331,7 @@ export function apply(ctx: Context, config: Config): void {
       : ctx.get('sessionProjections')?.stateOf(session, 'turnBoundary')?.lastTurn ?? 0
     const reason = turnEnds.reasonOf(session)
     detached.track(dispatcher.dispatch(
-      observeCall(session, turn),
+      observeCall(agent, turn),
       sessionEndPlan({ turn, ...reason === undefined ? {} : { reason } }),
     ))
   })
@@ -315,7 +341,7 @@ export function apply(ctx: Context, config: Config): void {
   // on; the run stays detached so reporting an error can never change it.
   ctx.on('agent/error', ({ agent, turn, step, error }) => {
     detached.track(dispatcher.dispatch(
-      observeCall(agent.session, turn, step),
+      observeCall(agent, turn, step),
       notificationPlan(errorNotification(error)),
     ))
   })
@@ -333,6 +359,7 @@ export function apply(ctx: Context, config: Config): void {
         session,
         cwd: ctx.workingDirectory.get(session),
         agentId: agent.id,
+        agent,
         turn,
         step: steps.of(session),
         signal,

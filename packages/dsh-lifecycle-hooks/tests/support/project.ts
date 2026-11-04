@@ -90,6 +90,51 @@ export function nodeScript(body: string): string {
 }
 
 /**
+ * Write an in-process hook module into the project.
+ * @param root - project root the path is relative to.
+ * @param relativePath - module path, conventionally under `.dsh/hooks/`.
+ * @param source - the module body, whose default export is the hook.
+ * @returns the absolute path.
+ */
+export async function writeHookModule(root: string, relativePath: string, source: string): Promise<string> {
+  await writeFileIn(root, relativePath, source)
+  return join(root, relativePath)
+}
+
+/**
+ * A `module` hook entry.
+ * @param id - hook id.
+ * @param path - module path, relative to the hooks file that declares it.
+ * @param options - optional lifecycle event, match clause, timeout, failure policy, detachment.
+ * @returns the JSON entry to write.
+ */
+export function moduleHook(
+  id: string,
+  path: string,
+  options: {
+    /** Lifecycle point; `tool.pre` when omitted. */
+    on?: string
+    match?: Record<string, unknown>
+    timeoutMs?: number
+    onFailure?: 'open' | 'block'
+    async?: boolean
+  } = {},
+): Record<string, unknown> {
+  return hook({
+    id,
+    ...options.on === undefined ? {} : { on: options.on },
+    ...options.match === undefined ? {} : { match: options.match },
+    ...options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs },
+    ...options.onFailure === undefined ? {} : { onFailure: options.onFailure },
+    run: {
+      type: 'module',
+      path,
+      ...options.async === undefined ? {} : { async: options.async },
+    },
+  })
+}
+
+/**
  * A `command` hook entry.
  * @param id - hook id.
  * @param command - shell command line, run in the Session's cwd.

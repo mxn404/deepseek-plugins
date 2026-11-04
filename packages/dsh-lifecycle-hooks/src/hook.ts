@@ -168,8 +168,37 @@ export interface CommandRun {
   readonly async: boolean
 }
 
+/**
+ * A module handler: an in-process ESM module loaded for every matching event.
+ *
+ * Only JavaScript modules are supported in this build — a TypeScript file has
+ * to be built before a hook can point at it — and the path is kept exactly as
+ * written, because it is relative to the hooks file that names it, not to the
+ * process. `module.ts` resolves it and reloads the module when its mtime moves.
+ */
+export interface ModuleRun {
+  readonly type: 'module'
+  /** Module path as written; resolved against the hooks file's directory. */
+  readonly path: string
+  /**
+   * Detached run: it never contributes to the event's decision, so the event
+   * does not wait for it. Its side effects and its audit row still happen, and
+   * its helpers stop working once the plugin is disposed.
+   */
+  readonly async: boolean
+}
+
 /** What a matching hook does, discriminated by its handler kind. */
-export type HookHandler = BuiltinRun | CommandRun
+export type HookHandler = BuiltinRun | CommandRun | ModuleRun
+
+/**
+ * Whether a handler kind runs detached from its event's decision.
+ * @param run - the entry's handler.
+ * @returns true when the event must not wait for it.
+ */
+export function isDetached(run: HookHandler): boolean {
+  return run.type !== 'builtin' && run.async
+}
 
 /**
  * Localized presentation of an approval question, as the host's `ask` decision
