@@ -100,6 +100,8 @@ export function commandHook(
   id: string,
   command: string,
   options: {
+    /** Lifecycle point; `tool.pre` when omitted. */
+    on?: string
     match?: Record<string, unknown>
     timeoutMs?: number
     onFailure?: 'open' | 'block'
@@ -108,6 +110,7 @@ export function commandHook(
 ): Record<string, unknown> {
   return hook({
     id,
+    ...options.on === undefined ? {} : { on: options.on },
     ...options.match === undefined ? {} : { match: options.match },
     ...options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs },
     ...options.onFailure === undefined ? {} : { onFailure: options.onFailure },

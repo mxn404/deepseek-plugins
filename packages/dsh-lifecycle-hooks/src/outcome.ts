@@ -5,14 +5,18 @@
  * halted. The precedence is fixed here and nowhere else:
  *
  * 1. `halt` — the turn is cancelled, whatever else said.
- * 2. `deny` — the first denial wins its reason; a later one cannot soften it.
- * 3. `context` — never a reason to stop, always concatenated in configuration
- *    order so the model reads the hooks in the order the file lists them.
+ * 2. `deny` / `block` — the first one wins its reason; a later one cannot
+ *    soften it, and a `block` outranks a `replace` with no relation to order.
+ * 3. `replace` — the last replacement in configuration order wins, so a hook
+ *    later in the file can refine an earlier one.
+ * 4. `context` — never a reason to stop, always concatenated in configuration
+ *    order so the model reads the hooks in the order the file lists them, even
+ *    when a block wins.
  *
- * Actions that a later ticket adds (`ask`, `block`, `continue`, `replace`)
- * join the ranking here. An action the event does not support is not merged at
- * all: {@link allowedDecisions} drops it with a warning first, keeping any
- * context the hook also contributed.
+ * Actions that a later ticket adds (`ask`, `continue`) join the ranking here.
+ * An action the event does not support is not merged at all:
+ * {@link allowedDecisions} drops it with a warning first, keeping any context
+ * the hook also contributed.
  *
  * @module dsh-lifecycle-hooks/outcome
  */
@@ -21,16 +25,30 @@ import type { HookRun } from './handler.ts'
 import type { HookAction, HookDecision, HookEvent } from './hook.ts'
 
 /** Reason used when a merge has to deny without one from a hook run. */
-const FALLBACK_REASON = 'denied by a lifecycle hook'
+const FALLBACK_DENY = 'denied by a lifecycle hook'
+
+/** Reason used when a merge has to block a tool result without one from a hook run. */
+const FALLBACK_BLOCK = 'blocked by a lifecycle hook'
 
 /** The decision an event applies after every matching hook ran. */
 export interface MergedDecision {
-  /** The blocking action to apply; `halt` outranks `deny`. */
-  readonly action?: Extract<HookAction, 'halt' | 'deny'>
-  /** Reason for {@link MergedDecision.action}, never empty when the action is set. */
+  /**
+   * The action to apply, ranked `halt` > `deny` / `block` > `replace`. Absent
+   * when the hooks only added context.
+   */
+  readonly action?: Extract<HookAction, 'halt' | 'deny' | 'block' | 'replace'>
+  /**
+   * Reason for a blocking action, never empty when the action is set. A
+   * `replace` has no reason of its own.
+   */
   readonly reason?: string
   /** Context lines from every hook, in configuration order. */
   readonly context: readonly string[]
+  /**
+   * The winning replacement, present exactly when {@link MergedDecision.action}
+   * is `replace`: only the model-visible content is ever replaced.
+   */
+  readonly replace?: { readonly text: string }
 }
 
 /**
@@ -38,8 +56,8 @@ export interface MergedDecision {
  *
  * An illegal action is a hook author's mistake, not an event failure: it is
  * warned about, ignored, and the rest of the hook's outcome still counts. The
- * action's reason is dropped with it — a reason without an action has nothing
- * to explain.
+ * action's reason and replacement are dropped with it — neither means anything
+ * without the action that applies it.
  * @param runs - the runs of every matched hook, in configuration order.
  * @param allowed - the actions the event supports.
  * @param warn - sink for the one-line notice naming the hook and the event.
@@ -65,9 +83,11 @@ export function allowedDecisions(
 /**
  * The decision a failed run synthesizes under `onFailure: "block"`.
  *
- * `tool.pre` denies the call: a broken safety hook must not let the call
- * through. The events a later ticket adds map their own blocking outcome here,
- * beside the merge ranking, so failure policy stays one decision per event.
+ * `tool.pre` denies the call and `tool.post` blocks the result: a broken
+ * safety hook must not let the call through, nor let the model read output it
+ * was supposed to sanitize. The events a later ticket adds map their own
+ * blocking outcome here, beside the merge ranking, so failure policy stays one
+ * decision per event.
  * @param event - the event the failed run belongs to.
  * @param hookId - the entry's id, named in the reason so the model can act on it.
  * @param error - the failure detail.
@@ -78,8 +98,9 @@ export function failureDecision(
   hookId: string,
   error: string,
 ): HookDecision | undefined {
-  if (event !== 'tool.pre') return undefined
-  return { action: 'deny', reason: `hook "${hookId}" failed: ${error}` }
+  if (event === 'tool.pre') return { action: 'deny', reason: `hook "${hookId}" failed: ${error}` }
+  if (event === 'tool.post') return { action: 'block', reason: `hook "${hookId}" failed: ${error}` }
+  return undefined
 }
 
 /**
@@ -90,6 +111,8 @@ export function failureDecision(
 export function mergeDecisions(runs: readonly HookRun[]): MergedDecision | undefined {
   let halt: HookDecision | undefined
   let deny: HookDecision | undefined
+  let block: HookDecision | undefined
+  let replace: { readonly text: string } | undefined
   const context: string[] = []
   for (const run of runs) {
     // The runner leaves `decision` unset on a failed run; the only failure that
@@ -99,14 +122,26 @@ export function mergeDecisions(runs: readonly HookRun[]): MergedDecision | undef
     if (decision === undefined) continue
     if (decision.action === 'halt') halt ??= decision
     else if (decision.action === 'deny') deny ??= decision
+    else if (decision.action === 'block') block ??= decision
+    // Replace is last-wins: a later hook refines the result the model reads,
+    // while `replace` without the action is an incomplete outcome and ignored.
+    else if (decision.action === 'replace' && decision.replace !== undefined) {
+      replace = decision.replace
+    }
     if (decision.context !== undefined) context.push(...decision.context)
   }
-  const blocking = halt ?? deny
-  if (blocking === undefined) return context.length === 0 ? undefined : { context }
+  const blocking = halt ?? deny ?? block
+  if (blocking === undefined) {
+    if (replace === undefined) return context.length === 0 ? undefined : { context }
+    return { action: 'replace', replace, context }
+  }
+  const action = halt !== undefined ? 'halt' : deny !== undefined ? 'deny' : 'block'
   const reason = (blocking.reason ?? '').trim()
   return {
-    action: halt === undefined ? 'deny' : 'halt',
-    reason: reason.length === 0 ? FALLBACK_REASON : reason,
+    action,
+    reason: reason.length === 0
+      ? action === 'block' ? FALLBACK_BLOCK : FALLBACK_DENY
+      : reason,
     context,
   }
 }

@@ -94,6 +94,72 @@ describe('the hooks file schema', () => {
     expect(parsed.hooks[0]?.run).toMatchObject({ reason: 'nope' })
   })
 
+  it('accepts the tool.post builtin outcomes and keeps their text', () => {
+    const parsed = hooksOf(JSON.stringify({
+      version: 1,
+      hooks: [
+        { id: 'redact', on: 'tool.post', run: { type: 'builtin', action: 'replace', text: 'REDACTED' } },
+        { id: 'block', on: 'tool.post', run: { type: 'builtin', action: 'block', reason: 'do not read that' } },
+        { id: 'note', on: 'tool.post', run: { type: 'builtin', action: 'inject', text: 'the file is generated' } },
+        { id: 'quiet', on: 'tool.post', run: { type: 'builtin', action: 'block' } },
+      ],
+    }))
+    expect(parsed.warnings).toEqual([])
+    expect(parsed.hooks.map(hook => hook.run)).toEqual([
+      { type: 'builtin', action: 'replace', text: 'REDACTED' },
+      { type: 'builtin', action: 'block', reason: 'do not read that' },
+      { type: 'builtin', action: 'inject', text: 'the file is generated' },
+      { type: 'builtin', action: 'block', reason: 'blocked by a lifecycle hook' },
+    ])
+    expect(parsed.hooks.map(hook => hook.on)).toEqual(['tool.post', 'tool.post', 'tool.post', 'tool.post'])
+  })
+
+  it.each([
+    [
+      'a tool.post denial',
+      { id: 'a', on: 'tool.post', run: { type: 'builtin', action: 'deny', reason: 'no' } },
+      'not supported by this build',
+    ],
+    [
+      'a tool.post replace with no text',
+      { id: 'a', on: 'tool.post', run: { type: 'builtin', action: 'replace' } },
+      '"run.text"',
+    ],
+    [
+      'a tool.post inject with no text',
+      { id: 'a', on: 'tool.post', run: { type: 'builtin', action: 'inject' } },
+      '"run.text"',
+    ],
+    [
+      'a tool.post replace with an empty text',
+      { id: 'a', on: 'tool.post', run: { type: 'builtin', action: 'replace', text: '  ' } },
+      '"run.text"',
+    ],
+    [
+      'a tool.pre replace',
+      { id: 'a', on: 'tool.pre', run: { type: 'builtin', action: 'replace', text: 'x' } },
+      'not supported by this build',
+    ],
+  ])('skips %s', (_label, entry, expected) => {
+    const parsed = hooksOf(JSON.stringify({ version: 1, hooks: [entry] }))
+    expect(parsed.hooks).toEqual([])
+    expect(parsed.warnings[0]).toContain(expected)
+  })
+
+  it('accepts a command handler on tool.post', () => {
+    const parsed = hooksOf(JSON.stringify({
+      version: 1,
+      hooks: [{
+        id: 'redact',
+        on: 'tool.post',
+        match: { tool: 'bash' },
+        run: { type: 'command', command: 'node .dsh/hooks/redact.mjs' },
+      }],
+    }))
+    expect(parsed.warnings).toEqual([])
+    expect(parsed.hooks[0]).toMatchObject({ id: 'redact', on: 'tool.post', run: { type: 'command' } })
+  })
+
   it('accepts a command handler on tool.pre', () => {
     const parsed = hooksOf(JSON.stringify({
       version: 1,
@@ -136,7 +202,7 @@ describe('the hooks file schema', () => {
     ['an unknown event', { id: 'a', on: 'nope', run: { type: 'builtin', action: 'deny' } }, 'unknown event'],
     [
       'an event a later ticket owns',
-      { id: 'a', on: 'tool.post', run: { type: 'builtin', action: 'deny' } },
+      { id: 'a', on: 'session.start', run: { type: 'builtin', action: 'deny' } },
       'not supported by this build',
     ],
     [
@@ -358,6 +424,44 @@ describe('merging one event’s decisions', () => {
       .toEqual({ action: 'deny', reason: 'two', context: [] })
   })
 
+  /** The same run helper, for a `tool.post` entry. */
+  const post = (id: string, decision?: HookDecision): HookRun => ({
+    ...run(id, decision),
+    event: 'tool.post',
+  })
+
+  it('lets a block outrank a replace and keeps every context', () => {
+    expect(mergeDecisions([
+      post('redact', { action: 'replace', replace: { text: 'clean' }, context: ['first'] }),
+      post('block', { action: 'block', reason: 'do not read this', context: ['second'] }),
+    ])).toEqual({
+      action: 'block',
+      reason: 'do not read this',
+      context: ['first', 'second'],
+    })
+  })
+
+  it('takes the last replace in configuration order', () => {
+    expect(mergeDecisions([
+      post('first', { action: 'replace', replace: { text: 'first text' } }),
+      post('second', { action: 'replace', replace: { text: 'second text' } }),
+    ])).toEqual({
+      action: 'replace',
+      replace: { text: 'second text' },
+      context: [],
+    })
+  })
+
+  it('returns a replace alone when nothing blocked the event', () => {
+    expect(mergeDecisions([post('redact', { action: 'replace', replace: { text: 'clean' } })]))
+      .toEqual({ action: 'replace', replace: { text: 'clean' }, context: [] })
+  })
+
+  it('fills a missing block reason', () => {
+    expect(mergeDecisions([post('quiet', { action: 'block' })]))
+      .toEqual({ action: 'block', reason: 'blocked by a lifecycle hook', context: [] })
+  })
+
   it('keeps a synthesized blocking decision that accompanies a failure', () => {
     // `onFailure: "block"` records the failure and a denial in the same run;
     // the merge must honour the denial instead of discarding the whole run.
@@ -406,5 +510,17 @@ describe('filtering actions an event does not support', () => {
     expect(allowedDecisions([run('gate', decision)], ['deny'], message => warnings.push(message))[0]?.decision)
       .toEqual(decision)
     expect(warnings).toEqual([])
+  })
+
+  it('drops the replacement with an unsupported replace action', () => {
+    const warnings: string[] = []
+    const filtered = allowedDecisions(
+      [run('redactor', { action: 'replace', replace: { text: 'clean' }, context: ['kept'] })],
+      ['deny', 'context', 'halt'],
+      message => warnings.push(message),
+    )
+    expect(filtered[0]?.decision).toEqual({ context: ['kept'] })
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('"replace"')
   })
 })

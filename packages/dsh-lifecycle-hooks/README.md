@@ -1,17 +1,20 @@
 # `dsh-lifecycle-hooks`
 
 声明式生命周期钩子。把规则写成仓库里的 `.dsh/hooks.json`，随代码提交；插件按 session 的
-当前工作目录读它，在工具执行前按名称与参数匹配，命中的 `deny` 让这次工具调用**不执行**，
-拒绝理由作为工具结果回到模型。需要更复杂的判断时，同一个位置可以跑一条 `command`：脚本从
-stdin 读 JSON、往 stdout 写一个 JSON outcome，同样能拒绝、能注入上下文、能直接停掉这一轮。
+当前工作目录读它，在工具执行前按名称与参数匹配：命中的 `deny` 让这次工具调用**不执行**，
+拒绝理由作为工具结果回到模型。工具执行后同一个文件还能改写结果：`replace` 换掉模型读到的
+内容（脱敏 / 裁剪），`block` 把结果变成错误反馈，`context` 给模型补一句提醒。需要更复杂的
+判断时，两个位置都能跑一条 `command`：脚本从 stdin 读 JSON、往 stdout 写一个 JSON outcome。
 
-本插件实现 spec [#7](https://github.com/mxn404/deepseek-plugins/issues/7) 的前三刀：
+本插件实现 spec [#7](https://github.com/mxn404/deepseek-plugins/issues/7) 的前四刀：
 [#8](https://github.com/mxn404/deepseek-plugins/issues/8) 的最小工具门禁（walking skeleton）、
-[#9](https://github.com/mxn404/deepseek-plugins/issues/9) 的分层发现 / 热重载，以及
-[#10](https://github.com/mxn404/deepseek-plugins/issues/10) 的 command handler 与决策协议
-（`deny` / `context` / `halt`）。后续票在同一套 dispatcher、配置 schema、发现与 e2e harness 上
-补齐其余事件、`module` handler 与 `ask` / `block` / `replace` / `continue` 等 outcome；目前只把
-`tool.pre` 这个事件点打通。
+[#9](https://github.com/mxn404/deepseek-plugins/issues/9) 的分层发现 / 热重载、
+[#10](https://github.com/mxn404/deepseek-plugins/issues/10) 的 command handler 与 `tool.pre`
+决策协议（`deny` / `context` / `halt`），以及
+[#11](https://github.com/mxn404/deepseek-plugins/issues/11) 的 `tool.post` 结果改写
+（`block` / `replace` / `context`）。后续票在同一套 dispatcher、配置 schema、发现与 e2e
+harness 上补齐其余事件、`module` handler 与 `ask` / `continue` 等 outcome；目前只把
+`tool.pre` 与 `tool.post` 两个事件点打通。
 
 ## 它做什么
 
@@ -26,21 +29,34 @@ stdin 读 JSON、往 stdout 写一个 JSON outcome，同样能拒绝、能注入
   做正则测试。`match` 整体省略表示匹配该事件点的全部调用。
 - **拒绝**：命中的 `run` 返回 `deny` 时，宿主拿到 `{ kind: 'deny', reason }`，工具管线因此
   不进入工具实现，模型收到的工具结果就是 `Error: <reason>`。被拒绝的调用不会产生副作用。
+- **改写结果**：`tool.post` 的 hook 在工具**已经执行完**之后运行，所以它不能撤销副作用，只能
+  决定模型读到什么。`replace` 用一段新文本替换模型可见的 `content`（成功与失败结果都支持），
+  结果本身的 `value` 与错误状态不变；`block` 把结果变成 `isError: true`，内容换成合并后的
+  反馈，工具确实跑过，模型知道为什么看不到输出。`tool.post` 永远不替换 `value`：那是执行期
+  的 schema 内 JSON，宿主只按工具自己的 render 产出模型可见内容；脚本在 stdout 里写
+  `{"replace":{"value":…}}` 会被当成协议错误，整次运行失败（默认放行、warn 并记审计）。
 - **命令**：`{ "type": "command", "command": "…" }` 通过宿主 `ctx.shell` 执行：cwd 是 session
   当前目录，stdin 是一份 JSON payload（`event` / `time` / `session_id` / `cwd` / `agent_id` /
   `turn` / `step` / `source` / `hook_id` / `tool`），env 至少带 `DSH_HOOK_EVENT`、
   `DSH_HOOK_SESSION_ID`、`DSH_HOOK_CWD`、`DSH_HOOK_TURN`、`DSH_HOOK_STEP`、`DSH_HOOK_ID`。
-  stdout 只认**一个** JSON outcome：`{ "action": …, "reason": …, "context": [ … ] }`；空输出
-  等于「没有动作」。非零退出、坏 JSON、超时都按运行失败处理（默认放行，见 `onFailure`），
-  超时由 shell 执行器杀掉整个进程组。`async: true` 的条目脱手执行，只做副作用、不参与决策，
-  插件销毁时会被中止。
+  stdout 只认**一个** JSON outcome：`{ "action": …, "reason": …, "context": [ … ], "replace": { "text": … } }`；
+  空输出等于「没有动作」，只写 `replace` 不写 `action` 也合法（等价于 `replace`）。非零退出、
+  坏 JSON、`replace.value`、超时都按运行失败处理（默认放行，见 `onFailure`），超时由 shell
+  执行器杀掉整个进程组。`async: true` 的条目脱手执行，只做副作用、不参与决策，插件销毁时会被
+  中止。
 - **上下文**：outcome 里的 `context` 是给模型看的提醒。同一事件点所有 hook 的 context 按配置
   顺序拼成**一条** user 消息，包成 `<system-reminder>`，message source 标
-  `dsh-lifecycle-hooks`；`tool.pre` 通过 `agent.inject` 送达，模型在**下一步**的请求里看到它。
+  `dsh-lifecycle-hooks`。`tool.pre` 通过 `agent.inject` 送达，`tool.post` 走宿主的
+  `additionalContexts`，两者都在**下一步**的请求里出现；`tool.post` 的 context 与 `block`
+  同时出现时也会保留（宿主的 block 只丢工具自己 defer 的 context，hook 通过
+  `additionalContexts` 给的那份会留下）。
 - **合并**：同一事件点的多条 hook 按合并顺序、文件内数组顺序执行。优先级固定为
-  `halt` > `deny` > `context`：第一条 `deny` 的理由生效，context 全部保留并按顺序拼接，只有
-  `halt` 会立即停止后续 handler 并以 `agent.cancel({ kind: 'hook', reason })` 中断这一轮。
-  事件不支持的 action（例如本版的 `ask`）会 warn 一句并忽略，其余部分照常生效。
+  `halt` > `deny` / `block` > `replace` > `context`：第一条 `deny` 或 `block` 的理由生效；
+  `replace` **最后一个生效**，后面的 hook 可以精修前面的替换；context 全部保留并按顺序拼接；
+  只有 `halt` 会立即停止后续 handler 并以 `agent.cancel({ kind: 'hook', reason })` 中断这一轮
+  （`tool.post` 的 halt 同时把该结果变成错误，模型不会读到 hook 愿意中断这一轮的那段输出）。
+  事件不支持的 action（例如本版 `tool.pre` 上的 `block`、`tool.post` 上的 `deny`）会 warn 一句
+  并忽略该动作，但保留它带的 context。
 - **审计**：每次 hook 运行往 session 写一条 `plugin:dsh-lifecycle-hooks/run`，含 `event`、
   `source`（配置文件绝对路径）、`hook_id`、`handler`、`action`、`duration_ms`、`exit_code`
   （command 才有）、`error`。记录不进入模型可见面，fork / resume 会带着走。
@@ -117,6 +133,19 @@ stdin 读 JSON、往 stdout 写一个 JSON outcome，同样能拒绝、能注入
       "match": { "tool": "bash", "args": { "command": "/^deploy /" } },
       "run": { "type": "command", "command": "node .dsh/hooks/guard-deploy.mjs" },
       "timeoutMs": 2000
+    },
+    {
+      "id": "redact-token",
+      "on": "tool.post",
+      "match": { "tool": "bash|read" },
+      "run": { "type": "command", "command": "node .dsh/hooks/redact-token.mjs" },
+      "onFailure": "block"
+    },
+    {
+      "id": "hide-binary",
+      "on": "tool.post",
+      "match": { "tool": "read", "args": { "file_path": "/\.png$/" } },
+      "run": { "type": "builtin", "action": "block", "reason": "read the image with the image tool" }
     }
   ]
 }
@@ -127,18 +156,31 @@ stdin 读 JSON、往 stdout 写一个 JSON outcome，同样能拒绝、能注入
 | `version` | 是 | 本插件的格式版本，当前只认 `1` |
 | `hooks` | 是 | hook 数组；空数组合法（等于没有配置） |
 | `hooks[].id` | 是 | 非空字符串，审计记录用它标识条目 |
-| `hooks[].on` | 是 | 事件名；本版只调度 `tool.pre` |
+| `hooks[].on` | 是 | 事件名；本版只调度 `tool.pre` 与 `tool.post` |
 | `hooks[].match` | 否 | 省略 = 全匹配；`tool` 与 `args` 是两条独立的约束 |
-| `hooks[].run` | 是 | handler；`{ "type": "builtin", "action": "deny", "reason": "…" }` 或 `{ "type": "command", "command": "…", "async": false }` |
+| `hooks[].run` | 是 | handler；`builtin`（`{ "type": "builtin", "action": "…", "reason": "…", "text": "…" }`）或 `command`（`{ "type": "command", "command": "…", "async": false }`） |
 | `hooks[].run.command` | command 必填 | shell 命令行，cwd 是 session 当前目录 |
 | `hooks[].run.async` | 否 | `true` 时脱手执行：只做副作用、不参与决策，销毁时中止 |
 | `hooks[].timeoutMs` | 否 | 正整数，覆盖行配置的 `defaultTimeoutMs` |
 | `hooks[].onFailure` | 否 | `open`（默认，失败放行）或 `block`（失败按事件合成阻断） |
 
 不认识的字段静默忽略。`on`、`run.type`、`run.action` 的完整词汇属于 spec，但本版只调度
-`tool.pre`，只执行 `builtin` 与 `command`，只让 `deny` / `context` / `halt` 生效；写了其他合法值
-会 warn 一句 “not supported by this build” 并跳过该条（command 在运行时输出的非法 action 则
-warn 一句「event 不支持」并忽略该动作），不会让整份文件失效。
+`tool.pre` 与 `tool.post`，只执行 `builtin` 与 `command`，并且每个事件只接受自己的动作：
+
+| 事件 | builtin 可用动作 | 写法 |
+|---|---|---|
+| `tool.pre` | `deny` | `{ "action": "deny", "reason": "…" }` |
+| `tool.post` | `block` | `{ "action": "block", "reason": "…" }` |
+| `tool.post` | `replace` | `{ "action": "replace", "text": "…" }` |
+| `tool.post` | `inject` | `{ "action": "inject", "text": "…" }` |
+
+`inject` 是 spec 的 builtin 词汇里「补一句 context」的动作，本插件把它折算成 `context` 的一条
+文本；`replace` 是 spec 没有单列 builtin 动作、本插件为 `tool.post` 补上的映射，等价于
+command 的 `{ "replace": { "text": "…" } }`。每个事件的 command 运行时 outcome 支持
+`action` / `reason` / `context` / `replace` 的任意合法组合；事件不支持的 action 只 warn 并忽略。
+
+写了别的合法值会 warn 一句 “not supported by this build” 并跳过该条（command 在运行时输出的
+非法 action 则 warn 一句「event 不支持」并忽略该动作，保留 context），不会让整份文件失效。
 
 匹配边界（都按 JSON 值判，不做字符串化）：`match.tool` 的 `/…/` 是**未锚定**的正则，需要整名
 匹配时自己写 `^…$`；`match.args` 的深子集只检查写出来的 key，实际参数里多出来的 key 不影响
@@ -158,8 +200,10 @@ warn 一句「event 不支持」并忽略该动作），不会让整份文件失
 }
 ```
 
-`action` 是这次运行**自己产出**的动作，不代表事件一定采纳了它（`async: true` 的运行与事件
-不支持的 action 都不会生效）；`exit_code` 只在 command 运行拿到退出码时出现（超时被杀、被
+`action` 是这次运行**自己产出**的动作（`deny` / `block` / `replace` / `halt`），不代表事件一定
+采纳了它（`async: true` 的运行、事件不支持的 action、以及被更高优先级 outcome 压过的
+`replace` 都不会生效）；`block` / `replace` 的运行即使没有压过别的 hook，也照样各写一条记录；
+只带 context 的运行没有 `action`。`exit_code` 只在 command 运行拿到退出码时出现（超时被杀、被
 信号杀死时没有）；`error` 只在运行失败时出现，失败默认不贡献决定，`onFailure: "block"` 时
 同一条记录会同时带 `error` 与合成的 `action`。本插件没有 UI，日志与这条记录是唯一的事后
 可观测面。
@@ -178,8 +222,12 @@ pnpm --dir /home/ubuntu/code/deepseek-harness dsh --profile dev --dump-config   
 
 这些是这一刀接受的边界，不是待修的缺陷：
 
-- **只覆盖 `tool.pre`**：其余事件与 `module` handler、`ask` / `block` / `replace` /
-  `continue` 还没实现；配置文件里合法地写了它们也只会被跳过并 warn。
+- **只覆盖 `tool.pre` 与 `tool.post`**：`session.start`、`step.start`、`turn.stop` 等其余事件与
+  `module` handler、`ask` / `continue` 还没实现；配置文件里合法地写了它们也只会被跳过并 warn。
+- **`tool.post` 不能阻止副作用**：hook 在工具执行后才运行，`block` / `replace` 只改变模型读到
+  的结果；工具写下的文件、发出的请求都已经发生。要在执行前拦截，用 `tool.pre` 的 `deny`。
+- **`replace` 只能换模型可见内容**：宿主的 `value` 是执行期 schema 内 JSON、从不落盘，也无法
+  由插件重新校验；本插件只做 content 替换，尝试替换 `value` 是运行失败，不是静默忽略。
 - **`halt` 不带 context**：halt 意味着这一轮被取消，向已取消的 inbox 注入提醒没有意义，所以
   halt 路径只取消、不注入。
 - **`step` 从事件流里记**：`turnBoundary` projection 没有 step 号，历史读取对生产代码已废弃，

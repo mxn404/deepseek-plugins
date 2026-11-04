@@ -8,10 +8,16 @@
  * - stdin carries one JSON payload (the event's facts);
  * - the environment carries the same facts a script needs to locate itself
  *   (`DSH_HOOK_*`, see `payload.ts`);
- * - stdout carries at most one JSON outcome object;
+ * - stdout carries at most one JSON outcome object, the spec's document:
+ *   `{action?, reason?, context?, replace?}`;
  * - a clean exit (0) with empty stdout means "no action"; a non-zero exit, a
  *   malformed outcome, or a timeout is a failure, which the dispatcher turns
  *   into the entry's `onFailure` policy.
+ *
+ * `replace` is `{text}` only. The canonical `value` of a tool result is never
+ * replaceable from here: it is execution-local, schema-checked JSON, and the
+ * model only ever reads the rendered content, so naming it is a protocol
+ * error rather than a silent no-op.
  *
  * `ctx.shell` owns the timeout, the process-group kill, the credential scrub,
  * and the output caps; this module never spawns directly.
@@ -32,6 +38,7 @@ const KNOWN_ACTIONS: ReadonlySet<string> = new Set<HookAction>([
   'halt',
   'context',
   'inject',
+  'replace',
 ])
 
 /** How much of a failure's stderr the log line keeps. */
@@ -108,11 +115,21 @@ export function decodeOutcome(stdout: string): CommandDecode {
     }
     context = raw.context
   }
+  const replace = decodeReplace(raw.replace)
+  if ('error' in replace) return protocolError(replace.error)
+  if (action === 'replace' && replace.replace === undefined) {
+    return protocolError('"action":"replace" needs a "replace" object with the replacement text')
+  }
 
   const decision: HookDecision = {
-    ...action === undefined ? {} : { action },
+    // A bare `{replace:{text}}` is the spec's replace outcome; the action is
+    // derived so the audit row and the merge rank it like any other action.
+    ...action === undefined && replace.replace === undefined
+      ? {}
+      : { action: action ?? 'replace' },
     ...raw.reason === undefined ? {} : { reason: raw.reason as string },
     ...context === undefined ? {} : { context },
+    ...replace.replace === undefined ? {} : { replace: replace.replace },
   }
   const decided = decision.action !== undefined || decision.context !== undefined
   return { decision: decided ? decision : undefined, error: undefined }
@@ -166,6 +183,32 @@ export async function runCommand(options: CommandOptions): Promise<CommandResult
 
   const decoded = decodeOutcome(result.stdout.text)
   return { decision: decoded.decision, exitCode, error: decoded.error }
+}
+
+/** Decoded `replace` field: the replacement, no replacement written, or a protocol error. */
+type ReplaceDecode =
+  | { readonly replace: { readonly text: string } | undefined }
+  | { readonly error: string }
+
+/**
+ * Decode the optional `replace` field.
+ *
+ * Only the model-visible text is replaceable, so a `value` key is rejected
+ * outright instead of being ignored: a hook that tries to rewrite canonical
+ * tool output must learn that the host cannot re-validate it here.
+ * @param raw - the outcome's `replace` value.
+ * @returns the replacement text, absence, or the reason to fail the run.
+ */
+function decodeReplace(raw: unknown): ReplaceDecode {
+  if (raw === undefined) return { replace: undefined }
+  if (!isRecord(raw)) return { error: '"replace" must be an object' }
+  if (Object.hasOwn(raw, 'value')) {
+    return {
+      error: '"replace" cannot replace "value": only the model-visible "text" is replaceable',
+    }
+  }
+  if (typeof raw.text !== 'string') return { error: '"replace.text" must be a string' }
+  return { replace: { text: raw.text } }
 }
 
 /**
