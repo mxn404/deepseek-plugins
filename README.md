@@ -33,7 +33,8 @@ deepseek-plugins/
 
 ## 本仓的插件
 
-每个目录都是声明了 `dsh.bundle` 的可安装插件，装进 profile 后按行 id 覆盖配置：
+下表每个包都是声明了 `dsh.bundle` 的可安装插件，装进 profile 后按行 id 覆盖配置
+（`packages/_template` 只是骨架，标记为 private，不进入市场）：
 
 | 包 | 形态 | 一句话 |
 |---|---|---|
