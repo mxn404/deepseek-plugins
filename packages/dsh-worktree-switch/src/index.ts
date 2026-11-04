@@ -3,7 +3,7 @@
  *
  * It mounts no service itself: the bundle patch inserts the harness worktree
  * service (`@deepseek-ai/dsh-experimental-worktree`, which provides
- * `ctx.worktrees`) and this plugin's own row. This plugin exposes four verbs
+ * `ctx.worktrees`) and this plugin's own row. This plugin exposes five verbs
  * over the Connection fetch bridge and drives that service for creation; the
  * browser half renders the switch and the panel.
  * @module dsh-worktree-switch

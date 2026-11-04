@@ -1,5 +1,5 @@
 /**
- * The plugin's host Remote face: the four verbs the browser half can call,
+ * The plugin's host Remote face: the five verbs the browser half can call,
  * expressed against a live session and the checkouts on disk.
  *
  * This module is the seam the host tests drive directly. Everything below it —
@@ -21,6 +21,7 @@ import type {
   DiscardValue,
   ListValue,
   PrepareValue,
+  ReleaseValue,
   StatusValue,
   WorktreeItem,
   WorktreeRef,
@@ -42,6 +43,7 @@ export type {
   DiscardValue,
   ListValue,
   PrepareValue,
+  ReleaseValue,
   StatusValue,
   WorktreeItem,
   WorktreeRef,
@@ -87,6 +89,17 @@ export interface WorktreeToggle {
    * @throws {WorktreeToggleError} when the project cannot host a copy or Git refused.
    */
   prepare(request: { readonly sessionId: string }, signal?: AbortSignal): Promise<PrepareValue>
+  /**
+   * Put the session back in its project directory, undoing a copy the switch
+   * created for it when it never became the conversation's workspace.
+   * @param request - the calling session.
+   * @param signal - caller cancellation.
+   * @returns the directory the session now runs in, the copy removed, and the
+   * copy left on disk when deleting it was not safe.
+   * @throws {WorktreeToggleError} when the project cannot be resolved or the
+   * session could not be moved back.
+   */
+  release(request: { readonly sessionId: string }, signal?: AbortSignal): Promise<ReleaseValue>
   /**
    * List the copies under one project's pool.
    * @param request - any directory inside the project.
@@ -142,14 +155,32 @@ async function worktreeAt(current: string, repositoryRoot: string): Promise<Work
 }
 
 /**
+ * Whether one absolute directory is the path itself or an ancestor of it.
+ * @param directory - candidate ancestor.
+ * @param path - absolute path to test.
+ * @returns true when `path` is `directory` or lives below it.
+ */
+function contains(directory: string, path: string): boolean {
+  const inside = relative(directory, path)
+  return inside === '' || (!inside.startsWith('..') && !isAbsolute(inside))
+}
+
+/**
  * Build the host face.
  * @param ctx - Host context with `agents`, `worktrees`, `workingDirectory`, and `subprocess`.
  * @param options - resolved row config.
- * @returns the four verbs.
+ * @returns the five verbs.
  */
 export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOptions): WorktreeToggle {
   /** One in-flight preparation per session, so a double mount cannot create twice. */
   const pending = new Map<string, Promise<PrepareValue>>()
+  /**
+   * Copies this host instance created for a session, by session id. Turning the
+   * switch off may only delete what the switch itself just made: a copy that
+   * existed before this instance started is left for the panel's explicit
+   * discard, because it may carry work the switch never saw.
+   */
+  const createdBySession = new Map<string, WorktreeRef>()
 
   const sessionOf = async (sessionId: string, signal?: AbortSignal): Promise<Agent> => {
     signal?.throwIfAborted()
@@ -252,9 +283,11 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
       const name = worktreeName()
       try {
         const created = await ctx.worktrees.create(agent, { name, from: 'HEAD' }, signal)
+        const worktree: WorktreeRef = { name: created.branch, path: created.path, branch: created.branch }
+        createdBySession.set(request.sessionId, worktree)
         return {
           state: 'created',
-          worktree: { name: created.branch, path: created.path, branch: created.branch },
+          worktree,
           repositoryRoot: created.repositoryRoot,
           sourceDirty: current.sourceDirty,
         }
@@ -329,25 +362,25 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
     return { supported: true, repositoryRoot: root, items }
   }
 
-  const discard = async (
-    request: { readonly path: string; readonly name: string },
-    signal?: AbortSignal,
-  ): Promise<DiscardValue> => {
-    const directory = absolutePath(request.path)
-    if (!isWorktreeName(request.name)) {
-      throw new WorktreeToggleError('worktree-name-invalid', `not a worktree name: ${request.name}`)
-    }
-    const root = await repositoryOf(directory, signal)
-    const listed = await list({ path: directory }, signal)
+  /**
+   * Delete one clean copy and its branch. Both the panel's discard and the
+   * switch's own undo go through here, so the dirty guard has one home.
+   * @param root - canonical repository root.
+   * @param name - copy name; already validated by the caller.
+   * @param signal - caller cancellation.
+   * @returns the removed copy's identity.
+   */
+  const removeCopy = async (root: string, name: string, signal?: AbortSignal): Promise<DiscardValue> => {
+    const listed = await list({ path: root }, signal)
     if (!listed.supported) {
       throw new WorktreeToggleError('not-a-git-repository', 'the project is not inside a Git working tree')
     }
-    const item = listed.items.find(entry => entry.name === request.name)
+    const item = listed.items.find(entry => entry.name === name)
     if (item === undefined) {
       throw new WorktreeToggleError(
         'worktree-not-found',
-        `no worktree named ${request.name} in ${root}`,
-        { name: request.name, repositoryRoot: root },
+        `no worktree named ${name} in ${root}`,
+        { name, repositoryRoot: root },
       )
     }
     if (item.changedFiles > 0) {
@@ -386,8 +419,92 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
         { name: item.name, branch: item.branch },
       )
     }
+    for (const [sessionId, copy] of createdBySession) {
+      if (copy.path === item.path) createdBySession.delete(sessionId)
+    }
     return { removed: true, name: item.name, branch: item.branch, path: item.path }
   }
 
-  return { status, prepare, list, discard }
+  const discard = async (
+    request: { readonly path: string; readonly name: string },
+    signal?: AbortSignal,
+  ): Promise<DiscardValue> => {
+    const directory = absolutePath(request.path)
+    if (!isWorktreeName(request.name)) {
+      throw new WorktreeToggleError('worktree-name-invalid', `not a worktree name: ${request.name}`)
+    }
+    const root = await repositoryOf(directory, signal)
+    return await removeCopy(root, request.name, signal)
+  }
+
+  const release = async (
+    request: { readonly sessionId: string },
+    signal?: AbortSignal,
+  ): Promise<ReleaseValue> => {
+    // A create may still be in flight for this session: undo after it settles,
+    // so a switch turned off mid-creation cannot race the copy into existence.
+    const running = pending.get(request.sessionId)
+    if (running !== undefined) {
+      try {
+        await running
+      } catch {
+        // Creation failed and already moved nothing; there is nothing to undo.
+      }
+    }
+    signal?.throwIfAborted()
+    const agent = await sessionOf(request.sessionId, signal)
+    const current = ctx.workingDirectory.get(agent.session)
+    // The immutable creation directory anchors the project, exactly as status
+    // does: the committed directory may already be a copy this session entered.
+    const anchor = agent.session.header.cwd ?? current
+    let root: string
+    try {
+      root = await repositoryOf(anchor, signal)
+    } catch (error) {
+      if (error instanceof GitFailure) {
+        throw new WorktreeToggleError(
+          'not-a-git-repository',
+          'the session project is not inside a Git working tree',
+        )
+      }
+      throw error
+    }
+    const listed = await list({ path: anchor }, signal)
+    if (!listed.supported) return { directory: current, removed: null, kept: null }
+    const path = await canonicalPath(current)
+    const item = listed.items.find(entry => contains(entry.path, path))
+    if (item === undefined) return { directory: current, removed: null, kept: null }
+    const copy: WorktreeRef = { name: item.name, path: item.path, branch: item.branch }
+    signal?.throwIfAborted()
+    let directory: string
+    try {
+      directory = await ctx.workingDirectory.set(agent, anchor, signal)
+    } catch (error) {
+      throw new WorktreeToggleError(
+        'release-failed',
+        `could not move the session back to ${anchor}: ${error instanceof Error ? error.message : String(error)}`,
+        { name: copy.name, path: copy.path },
+      )
+    }
+    const mine = createdBySession.get(request.sessionId)
+    if (mine === undefined || mine.path !== copy.path) {
+      // Not the switch's own copy: leave it, the panel can discard it by hand.
+      return { directory, removed: null, kept: copy }
+    }
+    try {
+      const removed = await removeCopy(root, copy.name, signal)
+      return {
+        directory,
+        removed: { name: removed.name, path: removed.path, branch: removed.branch },
+        kept: null,
+      }
+    } catch (error) {
+      if (signal?.aborted === true) throw error
+      // Dirty or refused by Git: the session is still back in the project, so
+      // the switch keeps its promise; the copy stays for the panel to handle.
+      return { directory, removed: null, kept: copy }
+    }
+  }
+
+  return { status, prepare, release, list, discard }
 }

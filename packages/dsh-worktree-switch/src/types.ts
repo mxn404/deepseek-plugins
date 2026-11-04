@@ -45,6 +45,19 @@ export type PrepareValue = {
   readonly sourceDirty: number
 }
 
+/** The result of turning the switch off before the first prompt. */
+export type ReleaseValue = {
+  /** The checkout the session now runs in. */
+  readonly directory: string
+  /**
+   * The copy this call deleted because the switch created it and it was clean,
+   * or null when there was nothing to undo or it was not safe to delete.
+   */
+  readonly removed: WorktreeRef | null
+  /** A copy left on disk: dirty, or not created by the switch. */
+  readonly kept: WorktreeRef | null
+}
+
 /** One row of the panel's list. */
 export interface WorktreeItem extends WorktreeRef {
   /** Milliseconds since the epoch, from the checkout directory's birth time. */

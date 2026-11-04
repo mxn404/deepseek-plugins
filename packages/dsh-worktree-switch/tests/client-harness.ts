@@ -66,7 +66,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { ComposerBlock } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { apply, inject as pluginInject, PANEL_ID } from '../src/client/index.tsx'
 import type {
-  ListValue, PrepareValue, StatusValue, WorktreeItem, WorktreeRef,
+  ListValue, PrepareValue, ReleaseValue, StatusValue, WorktreeItem, WorktreeRef,
 } from '../src/types.ts'
 
 /** Keyed `main` panel id the plugin registers under. */
@@ -153,7 +153,7 @@ async function loadClientModule<T>(specifier: string, id: string): Promise<T> {
 }
 
 /** The wire verbs this plugin's host half answers. */
-export type HostVerb = 'status' | 'prepare' | 'list' | 'discard'
+export type HostVerb = 'status' | 'prepare' | 'release' | 'list' | 'discard'
 
 /** One recorded host round trip. */
 export interface HostCall {
@@ -245,6 +245,21 @@ export function prepareValue(overrides: Partial<PrepareValue> = {}): PrepareValu
     worktree: copyRef(),
     repositoryRoot: REPOSITORY,
     sourceDirty: 0,
+    ...overrides,
+  }
+}
+
+/**
+ * A successful `release` answer: the session is back in the project and the
+ * copy the switch created is gone.
+ * @param overrides - fields to replace.
+ * @returns the release value.
+ */
+export function releaseValue(overrides: Partial<ReleaseValue> = {}): ReleaseValue {
+  return {
+    directory: REPOSITORY,
+    removed: copyRef(),
+    kept: null,
     ...overrides,
   }
 }
