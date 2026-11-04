@@ -65,9 +65,11 @@ export function allowedDecisions(
 /**
  * The decision a failed run synthesizes under `onFailure: "block"`.
  *
- * `tool.pre` denies the call: a broken safety hook must not let the call
- * through. The events a later ticket adds map their own blocking outcome here,
- * beside the merge ranking, so failure policy stays one decision per event.
+ * `tool.pre` denies the call and `step.start` denies the step: a broken safety
+ * hook must not let either through. The events a later ticket adds map their
+ * own blocking outcome here, beside the merge ranking, so failure policy stays
+ * one decision per event. `session.start` has no blocking outcome — it can only
+ * add context, so a failure there stays fail-open.
  * @param event - the event the failed run belongs to.
  * @param hookId - the entry's id, named in the reason so the model can act on it.
  * @param error - the failure detail.
@@ -78,7 +80,7 @@ export function failureDecision(
   hookId: string,
   error: string,
 ): HookDecision | undefined {
-  if (event !== 'tool.pre') return undefined
+  if (event !== 'tool.pre' && event !== 'step.start') return undefined
   return { action: 'deny', reason: `hook "${hookId}" failed: ${error}` }
 }
 

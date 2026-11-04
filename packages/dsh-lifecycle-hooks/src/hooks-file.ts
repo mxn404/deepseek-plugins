@@ -16,10 +16,11 @@
  */
 
 import { readFile, stat } from 'node:fs/promises'
-import type { Hook, HookEvent } from './hook.ts'
+import type { DispatchedHookEvent, Hook, HookAction, HookEvent } from './hook.ts'
+import { EVENT_ACTIONS } from './hook.ts'
 import { compileToolPattern, invalidArgPattern, isRecord, type HookMatch } from './match.ts'
 
-/** Hook events the format names; this build dispatches `tool.pre` only. */
+/** Hook events the format names; this build dispatches the ones in `EVENT_ACTIONS`. */
 const KNOWN_EVENTS: ReadonlySet<string> = new Set<HookEvent>([
   'session.start',
   'step.start',
@@ -31,8 +32,25 @@ const KNOWN_EVENTS: ReadonlySet<string> = new Set<HookEvent>([
   'notification',
 ])
 
-/** Actions a later ticket adds; naming one is a "not yet" warning, not a typo. */
-const KNOWN_ACTIONS: ReadonlySet<string> = new Set(['ask', 'block', 'continue', 'halt', 'context', 'inject'])
+/** Actions the format names; one outside the dispatching event's set is a "not yet" warning, not a typo. */
+const KNOWN_ACTIONS: ReadonlySet<string> = new Set<HookAction>([
+  'deny',
+  'ask',
+  'block',
+  'continue',
+  'halt',
+  'context',
+  'inject',
+])
+
+/**
+ * Whether one `on` value names an event this build dispatches.
+ * @param value - the string an entry's `on` field holds.
+ * @returns true when a dispatch plan exists for it.
+ */
+function isDispatchedEvent(value: string): value is DispatchedHookEvent {
+  return Object.hasOwn(EVENT_ACTIONS, value)
+}
 
 /** Result of validating one hooks file. */
 export type HooksParse =
@@ -123,12 +141,13 @@ function parseHook(
 
   if (typeof raw.on !== 'string') return skip('"on" must be a string naming a lifecycle event')
   if (!KNOWN_EVENTS.has(raw.on)) return skip(`unknown event "${raw.on}"`)
-  if (raw.on !== 'tool.pre') return skip(`event "${raw.on}" is not supported by this build`)
+  if (!isDispatchedEvent(raw.on)) return skip(`event "${raw.on}" is not supported by this build`)
+  const event = raw.on
 
-  const match = parseMatch(raw.match)
+  const match = parseMatch(raw.match, event)
   if ('error' in match) return skip(match.error)
 
-  const run = parseRun(raw.run)
+  const run = parseRun(raw.run, event)
   if ('error' in run) return skip(run.error)
 
   let timeoutMs = defaultTimeoutMs
@@ -147,7 +166,7 @@ function parseHook(
     onFailure = raw.onFailure
   }
 
-  return { id, on: 'tool.pre', match: match.match, run: run.run, timeoutMs, onFailure }
+  return { id, on: event, match: match.match, run: run.run, timeoutMs, onFailure }
 }
 
 /** Match parsing outcome: no clause, a clause, or an entry-level error to report. */
@@ -156,15 +175,24 @@ type MatchParse =
   | { readonly error: string }
 
 /**
- * Parse `match`, if present.
+ * Parse `match`, if present, for one event's dimensions.
+ *
+ * A dimension the event does not use is rejected rather than silently ignored:
+ * `match.tool` on `step.start` or `match.prompt` on `tool.pre` would otherwise
+ * select nothing (or everything) and look like a working rule.
  * @param raw - the entry's `match` value.
+ * @param event - the lifecycle point the entry is bound to.
  * @returns the compiled clause, or the reason the entry must be dropped.
  */
-function parseMatch(raw: unknown): MatchParse {
+function parseMatch(raw: unknown, event: DispatchedHookEvent): MatchParse {
   if (raw === undefined || raw === null) return { match: undefined }
   if (!isRecord(raw)) return { error: '"match" must be an object' }
+  // `session.start` happens before a turn exists, so it has no selection
+  // dimension at all; an entry carrying one is a mistake, not a no-op.
+  if (event === 'session.start') return { error: `"match" is not supported on ${event}` }
   let tool: HookMatch['tool']
   if (raw.tool !== undefined) {
+    if (event !== 'tool.pre') return { error: `"match.tool" is not supported on ${event}` }
     if (typeof raw.tool !== 'string') return { error: '"match.tool" must be a string' }
     const compiled = compileToolPattern(raw.tool)
     if (compiled === undefined) return { error: `"match.tool" is not a valid regular expression: ${raw.tool}` }
@@ -172,12 +200,21 @@ function parseMatch(raw: unknown): MatchParse {
   }
   let args: HookMatch['args']
   if (raw.args !== undefined) {
+    if (event !== 'tool.pre') return { error: `"match.args" is not supported on ${event}` }
     if (!isRecord(raw.args)) return { error: '"match.args" must be an object' }
     const invalid: string | undefined = invalidArgPattern(raw.args)
     if (invalid !== undefined) return { error: `"match.args" contains an invalid regular expression: ${invalid}` }
     args = raw.args
   }
-  return { match: { tool, args } }
+  let prompt: boolean | undefined
+  if (raw.prompt !== undefined) {
+    if (event !== 'step.start') {
+      return { error: `"match.prompt" is only supported on step.start, not ${event}` }
+    }
+    if (typeof raw.prompt !== 'boolean') return { error: `"match.prompt" must be a boolean on ${event}` }
+    prompt = raw.prompt
+  }
+  return { match: { tool, args, ...prompt === undefined ? {} : { prompt } } }
 }
 
 /** Run parsing outcome: the executable run, or an entry-level error to report. */
@@ -188,14 +225,15 @@ type RunParse =
 /**
  * Parse `run`, the handler description.
  * @param raw - the entry's `run` value.
+ * @param event - the lifecycle point the entry is bound to.
  * @returns the executable run, or the reason the entry must be dropped.
  */
-function parseRun(raw: unknown): RunParse {
+function parseRun(raw: unknown, event: DispatchedHookEvent): RunParse {
   if (!isRecord(raw)) return { error: '"run" must be an object' }
   if (typeof raw.type !== 'string') return { error: '"run.type" must be a string' }
   switch (raw.type) {
     case 'builtin':
-      return parseBuiltinRun(raw)
+      return parseBuiltinRun(raw, event)
     case 'command':
       return parseCommandRun(raw)
     case 'module':
@@ -206,23 +244,39 @@ function parseRun(raw: unknown): RunParse {
 }
 
 /**
- * Parse a `builtin` run: one action, denied by this build.
+ * Parse a `builtin` run: one action the event supports, applied without a
+ * process. `context` carries its reminder line in `text`; `deny` and `halt`
+ * carry an optional `reason` with a default.
  * @param raw - the entry's `run` value, known to be an object.
+ * @param event - the lifecycle point the entry is bound to.
  * @returns the executable run, or the reason the entry must be dropped.
  */
-function parseBuiltinRun(raw: Record<string, unknown>): RunParse {
+function parseBuiltinRun(raw: Record<string, unknown>, event: DispatchedHookEvent): RunParse {
   if (typeof raw.action !== 'string') return { error: '"run.action" must be a string' }
-  if (raw.action !== 'deny') {
-    return {
-      error: KNOWN_ACTIONS.has(raw.action)
-        ? `action "${raw.action}" is not supported by this build`
-        : `unknown action "${raw.action}"`,
-    }
+  const action = raw.action
+  if (!KNOWN_ACTIONS.has(action)) return { error: `unknown action "${action}"` }
+  if (!EVENT_ACTIONS[event].includes(action as HookAction)) {
+    return { error: `action "${action}" is not supported by this build on ${event}` }
   }
-  const reason = typeof raw.reason === 'string' && raw.reason.trim().length > 0
-    ? raw.reason
-    : undefined
-  return { run: { type: 'builtin', action: 'deny', reason: reason ?? 'denied by a lifecycle hook' } }
+  switch (action) {
+    case 'context':
+      if (typeof raw.text !== 'string' || raw.text.trim().length === 0) {
+        return { error: '"run.text" must be a non-empty string for action "context"' }
+      }
+      return { run: { type: 'builtin', action: 'context', text: raw.text } }
+    case 'deny':
+    case 'halt': {
+      const reason = typeof raw.reason === 'string' && raw.reason.trim().length > 0
+        ? raw.reason
+        : undefined
+      const fallback = action === 'halt' ? 'halted by a lifecycle hook' : 'denied by a lifecycle hook'
+      return { run: { type: 'builtin', action, reason: reason ?? fallback } }
+    }
+    default:
+      // Remembered for the handler kinds a later ticket adds; unreachable while
+      // `EVENT_ACTIONS` names only actions this build can decide.
+      return { error: `action "${action}" is not supported by this build on ${event}` }
+  }
 }
 
 /**

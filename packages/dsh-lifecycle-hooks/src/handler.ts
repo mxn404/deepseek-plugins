@@ -14,7 +14,7 @@
 import type { ShellExecutor } from '@deepseek-ai/dsh-shell'
 import type { CommandResult } from './command.ts'
 import { runCommand } from './command.ts'
-import type { Hook, HookDecision, HookEvent, HookHandlerKind } from './hook.ts'
+import type { BuiltinRun, Hook, HookDecision, HookEvent, HookHandlerKind } from './hook.ts'
 
 /** The shell surface a command run needs; absent when the deployment has none. */
 export type HandlerShell = Pick<ShellExecutor, 'resolve' | 'execute'> | undefined
@@ -56,6 +56,19 @@ export interface HookRun {
 }
 
 /**
+ * The decision one `builtin` run contributes.
+ *
+ * `context` carries its reminder line; `deny` and `halt` carry a reason the
+ * loader already defaulted, so the merge never has to invent one.
+ * @param run - the validated builtin run.
+ * @returns its decision, in the shape the merge reads.
+ */
+function builtinDecision(run: BuiltinRun): HookDecision {
+  if (run.action === 'context') return { action: 'context', context: [run.text ?? ''] }
+  return { action: run.action, ...run.reason === undefined ? {} : { reason: run.reason } }
+}
+
+/**
  * Run one matched hook.
  *
  * A throwing handler never propagates: its run carries `error` instead, so one
@@ -79,7 +92,7 @@ export async function executeHook(
         source,
         event: hook.on,
         handler: run.type,
-        decision: { action: run.action, reason: run.reason },
+        decision: builtinDecision(run),
         error: undefined,
         durationMs: Math.round(performance.now() - started),
         exitCode: undefined,

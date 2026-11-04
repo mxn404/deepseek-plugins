@@ -7,7 +7,8 @@
  * outcomes, and hand the merged decision to the event's own applier — so a new
  * event only supplies a {@link DispatchPlan}: what it matches, what it puts in
  * the payload, which actions it supports, and how the decision reaches the host
- * seam. `tool.pre` is the only plan this build registers.
+ * seam. This build registers a plan for `session.start`, `step.start`, and
+ * `tool.pre`.
  *
  * Two rules are enforced here for every event:
  *
@@ -50,13 +51,23 @@ export interface DispatchCall {
   readonly signal: AbortSignal
 }
 
+/**
+ * The match dimensions one event offers its hooks.
+ *
+ * `session.start` has none, `tool.pre` has a tool and its arguments, and
+ * `step.start` has the presence of a user prompt. The loader rejects a `match`
+ * dimension the event does not offer, so selection only ever consults the
+ * dimension the event hands over.
+ */
+export type MatchSubject =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'tool'; readonly tool: string; readonly args: unknown }
+  | { readonly kind: 'prompt'; readonly prompt: string | null }
+
 /** The part of a call an event's hooks may select and see. */
 export interface DispatchSubject {
-  /**
-   * Tool name and parsed arguments for `match`; `undefined` for events that
-   * have no tool, where only entries with no `match` clause are selected.
-   */
-  readonly match: { readonly tool: string; readonly args: unknown } | undefined
+  /** What this event's `match` clause can select on. */
+  readonly match: MatchSubject
   /** Extra payload fields for this event (for `tool.pre`, the `tool` block). */
   readonly fields: Record<string, unknown>
 }
@@ -71,11 +82,12 @@ export interface DispatchPlan<TApplied> {
   readonly subject: DispatchSubject
   /**
    * Apply the merged decision, or return `undefined` to leave the host's own
-   * behaviour untouched.
+   * behaviour untouched. Asynchronous appliers are for events whose fold has
+   * to delegate down the host's own waterfall first (`step.start`).
    * @param decision - the ranked outcome of every run.
    * @returns the value the host seam consumes, when the event has one.
    */
-  apply(decision: MergedDecision): TApplied | undefined
+  apply(decision: MergedDecision): TApplied | undefined | Promise<TApplied | undefined>
 }
 
 /** What the dispatcher needs from the plugin instance that owns it. */
@@ -138,7 +150,9 @@ export class HookDispatcher {
         }
         const run = this.settle(await this.run(hook, layer.source, call, plan, call.signal))
         runs.push(run)
-        if (run.decision?.action === 'halt') break handlers
+        // An illegal action is ignored later, so it must not stop the hooks
+        // behind it either: only a halt this event can apply ends the loop.
+        if (run.decision?.action === 'halt' && plan.actions.includes('halt')) break handlers
       }
     }
 
@@ -146,7 +160,7 @@ export class HookDispatcher {
     const merged = mergeDecisions(allowedDecisions(runs, plan.actions, this.options.warn))
     if (merged === undefined) return undefined
     if (call.signal.aborted) return undefined
-    return plan.apply(merged)
+    return await plan.apply(merged)
   }
 
   /**
@@ -239,15 +253,26 @@ export class HookDispatcher {
 /**
  * Whether one entry selects this event's subject.
  *
- * An event with no tool matches only entries with no `match` clause: a
- * `match.tool` on such an event would otherwise silently select nothing.
- * @param match - the entry's compiled clause.
- * @param subject - the event's match facts, or `undefined`.
+ * Selection is per event: a `match.prompt: true` on `step.start` selects only a
+ * step that carries a user prompt, while an event with no match dimensions
+ * selects only entries with no clause at all. The loader has already rejected
+ * a dimension the event does not offer, so each branch only consults its own.
+ * @param match - the entry's compiled clause; `undefined` selects everything.
+ * @param subject - the event's match facts.
  * @returns true when the entry applies.
  */
-function selects(match: HookMatch | undefined, subject: DispatchSubject['match']): boolean {
-  if (subject === undefined) return match === undefined
-  return matchesHook(match, subject.tool, subject.args)
+function selects(match: HookMatch | undefined, subject: MatchSubject): boolean {
+  if (match === undefined) return true
+  switch (subject.kind) {
+    case 'none':
+      return match.tool === undefined && match.args === undefined && match.prompt === undefined
+    case 'tool':
+      if (match.prompt !== undefined) return false
+      return matchesHook(match, subject.tool, subject.args)
+    case 'prompt':
+      if (match.tool !== undefined || match.args !== undefined) return false
+      return match.prompt === undefined || match.prompt === (subject.prompt !== null)
+  }
 }
 
 /**

@@ -14,7 +14,7 @@ import type { HookMatch } from './match.ts'
 
 /**
  * Lifecycle points the `.dsh/hooks.json` vocabulary names. This build
- * dispatches `tool.pre` only.
+ * dispatches the three listed in {@link DispatchedHookEvent}.
  */
 export type HookEvent =
   | 'session.start'
@@ -26,11 +26,39 @@ export type HookEvent =
   | 'session.end'
   | 'notification'
 
+/**
+ * Lifecycle points this build dispatches. A later ticket adds its event here
+ * and to {@link EVENT_ACTIONS}; the loader derives its supported set from that
+ * table, so an entry for any other named event is skipped with one warning.
+ */
+export type DispatchedHookEvent = 'session.start' | 'step.start' | 'tool.pre'
+
+/**
+ * Actions each dispatched event applies. This is the single authority the
+ * loader validates against and the dispatch plans read from, so an entry can
+ * never carry an action its event would silently ignore:
+ *
+ * - `session.start` only adds context — it fires before a turn exists, so it
+ *   has nothing to deny, halt, or ask about.
+ * - `step.start` denies the proposed step, adds context to it, or halts the
+ *   turn.
+ * - `tool.pre` denies the call, adds context for the next request, or halts
+ *   the turn.
+ */
+export const EVENT_ACTIONS: Readonly<Record<DispatchedHookEvent, readonly HookAction[]>> = {
+  'session.start': ['context'],
+  'step.start': ['deny', 'context', 'halt'],
+  'tool.pre': ['deny', 'context', 'halt'],
+}
+
 /** Handler kinds the `.dsh/hooks.json` vocabulary names. */
 export type HookHandlerKind = 'builtin' | 'command' | 'module'
 
 /** Actions the `.dsh/hooks.json` vocabulary names. This build executes `deny`, `context`, and `halt`. */
 export type HookAction = 'deny' | 'ask' | 'block' | 'continue' | 'halt' | 'context' | 'inject'
+
+/** Actions a `builtin` handler can decide without running anything. */
+export type BuiltinAction = Extract<HookAction, 'deny' | 'context' | 'halt'>
 
 /**
  * Whether a failing hook lets the event through (`open`, the default) or turns
@@ -39,11 +67,13 @@ export type HookAction = 'deny' | 'ask' | 'block' | 'continue' | 'halt' | 'conte
 export type HookFailurePolicy = 'open' | 'block'
 
 /** A one-line builtin decision, applied without running anything. */
-export interface BuiltinDenyRun {
+export interface BuiltinRun {
   readonly type: 'builtin'
-  readonly action: 'deny'
-  /** Model-facing reason; never empty. */
-  readonly reason: string
+  readonly action: BuiltinAction
+  /** Model-facing reason for `deny` and `halt`; never empty when present. */
+  readonly reason?: string
+  /** Reminder line for `context`; never empty when present. */
+  readonly text?: string
 }
 
 /**
@@ -64,7 +94,7 @@ export interface CommandRun {
 }
 
 /** What a matching hook does, discriminated by its handler kind. */
-export type HookHandler = BuiltinDenyRun | CommandRun
+export type HookHandler = BuiltinRun | CommandRun
 
 /** One hook run's contribution to its event's decision. */
 export interface HookDecision {
@@ -83,9 +113,9 @@ export interface HookDecision {
 export interface Hook {
   /** Entry identity, unique within its file by convention and logged with every run. */
   readonly id: string
-  /** Lifecycle point; `tool.pre` for every entry this build keeps. */
-  readonly on: HookEvent
-  /** Which calls it selects; `undefined` selects every call at that point. */
+  /** Lifecycle point; one of the events this build dispatches. */
+  readonly on: DispatchedHookEvent
+  /** Which calls or steps it selects; `undefined` selects everything at that point. */
   readonly match: HookMatch | undefined
   /** What it does when it matches. */
   readonly run: HookHandler
