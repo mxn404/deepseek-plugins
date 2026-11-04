@@ -70,11 +70,15 @@ export function toolPrePlan(exec: ToolExecution, agent: Agent): DispatchPlan<Pre
 }
 
 /**
- * Fold every hook's context into the one reminder message the model sees.
+ * Fold text into the one reminder message the model sees.
+ *
+ * Shared by every event that puts hook text on the model surface (`tool.pre`
+ * injects it, `turn.stop` steers it), so the wrapping and attribution stay one
+ * format.
  * @param context - the lines, already in configuration order.
  * @returns the user-role message to inject.
  */
-function contextMessage(context: readonly string[]): UserMessage {
+export function contextMessage(context: readonly string[]): UserMessage {
   return createUserMessage({
     content: [{ type: 'text', text: `<system-reminder>\n${context.join('\n')}\n</system-reminder>` }],
     source: CONTEXT_SOURCE,

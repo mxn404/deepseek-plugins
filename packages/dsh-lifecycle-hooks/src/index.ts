@@ -5,22 +5,25 @@
  * apply to the Session's current directory (the user-level file, then every
  * project and local file from the nearest `.git` root down to that directory)
  * and dispatches their hooks at dsh lifecycle extension points. This slice
- * dispatches `tool.pre`, with three ways to decide it: a `builtin` deny, a
- * `command` script that reads the call on stdin and answers on stdout, and a
- * shared merge that lets a later `halt` stop the turn.
+ * dispatches `tool.pre` and `turn.stop`: a `builtin` or `command` handler reads
+ * the call and answers with an outcome, a shared merge ranks the answers, and
+ * the event's plan reaches the host seam (deny a call, halt the turn, inject
+ * context, or steer a stopping turn on for one more step).
  *
  * The wiring here is deliberately thin. Discovery lives in `discovery.ts`,
  * reading and validating one hooks file in `hooks-file.ts`, matching in
  * `match.ts`, execution in `handler.ts` / `command.ts`, the per-event payload in
  * `payload.ts`, the single resolve→run→record→merge→apply pipeline in
- * `dispatch.ts`, the decision ranking in `outcome.ts`, and the audit row in
- * `audit.ts`. `apply` only connects them to the host: the watcher lifecycle,
- * the step tracker, and one `tools/pre-execute` listener.
+ * `dispatch.ts`, the decision ranking in `outcome.ts`, the events' plans in
+ * `tool-pre.ts` / `turn-stop.ts`, and the audit row in `audit.ts`. `apply` only
+ * connects them to the host: the watcher lifecycle, the step tracker, and the
+ * two event listeners.
  *
  * @module dsh-lifecycle-hooks
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-projection'
 import type { PreToolDecision } from '@deepseek-ai/dsh-tools'
@@ -31,6 +34,7 @@ import { HookResolver } from './discovery.ts'
 import { HookDispatcher } from './dispatch.ts'
 import { StepTracker } from './step.ts'
 import { toolPrePlan } from './tool-pre.ts'
+import { StopContinues, turnStopPlan } from './turn-stop.ts'
 import { HookWatcher } from './watch.ts'
 
 /** Plugin id: package name and bundle row id. */
@@ -97,6 +101,7 @@ export function apply(ctx: Context, config: Config): void {
   // aborts a still-running process instead of leaking it past the plugin.
   const detached = createDetachedRuns()
   const steps = new StepTracker()
+  const stopContinues = new StopContinues()
 
   // `working-directory/change` is a durable SessionEvent, not a Cordis event:
   // observe it through the session's append feed and follow the Session into
@@ -154,5 +159,33 @@ export function apply(ctx: Context, config: Config): void {
       toolPrePlan(exec, agent),
     )
     return applied ?? next()
+  })
+
+  // `turn.stop` runs at the host's natural-stop boundary. Its return value is
+  // ignored: a continue keeps the turn alive only because the plan steers the
+  // agent before this serial dispatch settles. The payload's turn doubles as
+  // the loop guard's reset key.
+  ctx.on('agent/turn-stopping', async ({ agent, turn, signal }) => {
+    if (signal.aborted) return
+    const session = agent.session
+    const continuedCount = stopContinues.of(agent, turn)
+    await dispatcher.dispatch(
+      {
+        session,
+        cwd: ctx.workingDirectory.get(session),
+        agentId: agent.id,
+        turn,
+        step: steps.of(session),
+        signal,
+        continuedCount,
+      },
+      turnStopPlan(agent, {
+        turn,
+        continuedCount,
+        continues: stopContinues,
+        maxStopContinues: config.maxStopContinues,
+        warn,
+      }),
+    )
   })
 }
