@@ -14,7 +14,7 @@
 import type { ShellExecutor } from '@deepseek-ai/dsh-shell'
 import type { CommandResult } from './command.ts'
 import { runCommand } from './command.ts'
-import type { Hook, HookDecision, HookEvent, HookHandlerKind } from './hook.ts'
+import type { BuiltinRun, Hook, HookDecision, HookEvent, HookHandlerKind } from './hook.ts'
 
 /** The shell surface a command run needs; absent when the deployment has none. */
 export type HandlerShell = Pick<ShellExecutor, 'resolve' | 'execute'> | undefined
@@ -56,6 +56,27 @@ export interface HookRun {
 }
 
 /**
+ * The decision a builtin run contributes.
+ *
+ * `inject` is the spec's builtin way to add context, so it contributes context
+ * instead of an action; `replace` carries the text the event puts in front of
+ * the model. Both are filtered by the event's own plan like any other outcome.
+ * @param run - the validated builtin run.
+ * @returns its contribution to the event's merge.
+ */
+function builtinDecision(run: BuiltinRun): HookDecision {
+  switch (run.action) {
+    case 'deny':
+    case 'block':
+      return { action: run.action, reason: run.reason }
+    case 'replace':
+      return { action: 'replace', replace: { text: run.text } }
+    case 'inject':
+      return { context: [run.text] }
+  }
+}
+
+/**
  * Run one matched hook.
  *
  * A throwing handler never propagates: its run carries `error` instead, so one
@@ -79,7 +100,7 @@ export async function executeHook(
         source,
         event: hook.on,
         handler: run.type,
-        decision: { action: run.action, reason: run.reason },
+        decision: builtinDecision(run),
         error: undefined,
         durationMs: Math.round(performance.now() - started),
         exitCode: undefined,

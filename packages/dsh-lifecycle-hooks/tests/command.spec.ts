@@ -39,6 +39,32 @@ describe('the command stdout contract', () => {
     })
   })
 
+  it('reads a bare replace as replacing the model-visible text', () => {
+    expect(decodeOutcome('{"replace":{"text":"REDACTED"}}')).toEqual({
+      decision: { action: 'replace', replace: { text: 'REDACTED' } },
+      error: undefined,
+    })
+  })
+
+  it('reads a replace that also carries context', () => {
+    expect(decodeOutcome(JSON.stringify({
+      replace: { text: 'token=[REDACTED]' },
+      context: ['secrets are redacted before the model reads tool output'],
+    }))).toEqual({
+      decision: {
+        action: 'replace',
+        replace: { text: 'token=[REDACTED]' },
+        context: ['secrets are redacted before the model reads tool output'],
+      },
+      error: undefined,
+    })
+  })
+
+  it('reads an explicit replace action with its text', () => {
+    expect(decodeOutcome('{"action":"replace","replace":{"text":"clean"}}').decision)
+      .toEqual({ action: 'replace', replace: { text: 'clean' } })
+  })
+
   it('reads every action the vocabulary knows, leaving event legality to the dispatcher', () => {
     expect(decodeOutcome('{"action":"ask","reason":"needs a human"}').decision)
       .toEqual({ action: 'ask', reason: 'needs a human' })
@@ -61,6 +87,11 @@ describe('the command stdout contract', () => {
     ['a non-string reason', '{"reason":7}', '"reason" must be a string'],
     ['a non-array context', '{"action":"deny","context":"one"}', '"context" must be an array'],
     ['a non-string context entry', '{"action":"deny","context":["one",2]}', '"context" entries must be strings'],
+    ['a non-object replace', '{"replace":"REDACTED"}', '"replace" must be an object'],
+    ['a replace without text', '{"replace":{}}', '"replace.text" must be a string'],
+    ['a non-string replace text', '{"replace":{"text":7}}', '"replace.text" must be a string'],
+    ['a replace of the canonical value', '{"replace":{"value":42}}', 'cannot replace "value"'],
+    ['a replace action without a replace object', '{"action":"replace"}', '"action":"replace" needs'],
   ])('rejects %s', (_label, stdout, expected) => {
     const decoded = decodeOutcome(stdout)
     expect(decoded.decision).toBeUndefined()

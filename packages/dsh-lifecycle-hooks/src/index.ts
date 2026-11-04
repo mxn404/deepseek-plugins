@@ -5,9 +5,9 @@
  * apply to the Session's current directory (the user-level file, then every
  * project and local file from the nearest `.git` root down to that directory)
  * and dispatches their hooks at dsh lifecycle extension points. This slice
- * dispatches `tool.pre`, with three ways to decide it: a `builtin` deny, a
- * `command` script that reads the call on stdin and answers on stdout, and a
- * shared merge that lets a later `halt` stop the turn.
+ * dispatches `tool.pre` (deny, context, halt) and `tool.post` (block, replace,
+ * context, halt), each through the same merge of `builtin` and `command`
+ * outcomes.
  *
  * The wiring here is deliberately thin. Discovery lives in `discovery.ts`,
  * reading and validating one hooks file in `hooks-file.ts`, matching in
@@ -15,7 +15,8 @@
  * `payload.ts`, the single resolve→run→record→merge→apply pipeline in
  * `dispatch.ts`, the decision ranking in `outcome.ts`, and the audit row in
  * `audit.ts`. `apply` only connects them to the host: the watcher lifecycle,
- * the step tracker, and one `tools/pre-execute` listener.
+ * the step tracker, and one listener per dispatched event, each of which hands
+ * the shared dispatcher a plan and nothing else.
  *
  * @module dsh-lifecycle-hooks
  */
@@ -23,13 +24,14 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-projection'
-import type { PreToolDecision } from '@deepseek-ai/dsh-tools'
+import type { PostToolDecision, PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-working-directory'
 import { Config } from './config.ts'
 import { createDetachedRuns } from './detached.ts'
 import { HookResolver } from './discovery.ts'
 import { HookDispatcher } from './dispatch.ts'
 import { StepTracker } from './step.ts'
+import { toolPostPlan } from './tool-post.ts'
 import { toolPrePlan } from './tool-pre.ts'
 import { HookWatcher } from './watch.ts'
 
@@ -134,25 +136,46 @@ export function apply(ctx: Context, config: Config): void {
     },
   })
 
-  ctx.on('tools/pre-execute', async (exec, next): Promise<PreToolDecision> => {
-    const agent = exec.agent
-    // Programmatic callers have no Session, so no plugin record and no cwd.
-    if (agent === undefined) return next()
+  /**
+   * The facts every tool event reports to the dispatcher.
+   *
+   * Both tool seams share them; only the event's own plan differs. An agent is
+   * always set for model-driven calls, and the programmatic ones have no
+   * Session, so no audit row and no cwd to resolve hooks against.
+   * @param exec - the call the event belongs to.
+   * @param agent - the agent that issued it.
+   * @returns the dispatch call, or `undefined` when the event must pass through.
+   */
+  const callFor = (exec: ToolExecution, agent: NonNullable<ToolExecution['agent']>) => {
     // Observe cancellation before doing file work; the registry rechecks it
     // after the gate settles either way.
-    if (exec.signal.aborted) return next()
+    if (exec.signal.aborted) return undefined
+    return {
+      session: agent.session,
+      cwd: ctx.workingDirectory.get(agent.session),
+      agentId: agent.id,
+      turn: ctx.get('sessionProjections')?.stateOf(agent.session, 'turnBoundary')?.lastTurn ?? 0,
+      step: steps.of(agent.session),
+      signal: exec.signal,
+    }
+  }
 
-    const applied = await dispatcher.dispatch(
-      {
-        session: agent.session,
-        cwd: ctx.workingDirectory.get(agent.session),
-        agentId: agent.id,
-        turn: ctx.get('sessionProjections')?.stateOf(agent.session, 'turnBoundary')?.lastTurn ?? 0,
-        step: steps.of(agent.session),
-        signal: exec.signal,
-      },
-      toolPrePlan(exec, agent),
-    )
-    return applied ?? next()
+  ctx.on('tools/pre-execute', async (exec, next): Promise<PreToolDecision> => {
+    const agent = exec.agent
+    // Programmatic callers have no Session: nothing to audit, nothing to resolve.
+    if (agent === undefined) return next()
+    const call = callFor(exec, agent)
+    if (call === undefined) return next()
+    return await dispatcher.dispatch(call, toolPrePlan(exec, agent)) ?? next()
+  })
+
+  ctx.on('tools/post-execute', async (exec, result, next): Promise<PostToolDecision> => {
+    // The tool has already run; a hook here rewrites what the model reads and
+    // can never prevent the side effect. Programmatic calls pass straight on.
+    const agent = exec.agent
+    if (agent === undefined) return next()
+    const call = callFor(exec, agent)
+    if (call === undefined) return next()
+    return await dispatcher.dispatch(call, toolPostPlan(exec, result, agent)) ?? next()
   })
 }

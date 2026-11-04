@@ -7,7 +7,7 @@
  * outcomes, and hand the merged decision to the event's own applier — so a new
  * event only supplies a {@link DispatchPlan}: what it matches, what it puts in
  * the payload, which actions it supports, and how the decision reaches the host
- * seam. `tool.pre` is the only plan this build registers.
+ * seam. `tool.pre` and `tool.post` are the plans this build registers.
  *
  * Two rules are enforced here for every event:
  *

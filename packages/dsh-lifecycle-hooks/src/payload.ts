@@ -37,7 +37,8 @@ export interface PayloadFacts {
 /**
  * Build the JSON object written to a command hook's stdin.
  * @param facts - the common event facts.
- * @param eventFields - the event's own payload fields (for `tool.pre`, the `tool` block).
+ * @param eventFields - the event's own payload fields: the `tool` block on both
+ * tool events, plus `result` (`is_error`, `content`) on `tool.post`.
  * @returns the payload object; `time` is stamped now.
  */
 export function commandPayload(

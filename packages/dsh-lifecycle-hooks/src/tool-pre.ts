@@ -32,7 +32,7 @@ declare module '@deepseek-ai/dsh-llm' {
 }
 
 /** Source stamped on every context message this plugin injects. */
-const CONTEXT_SOURCE: MessageSource = { kind: 'dsh-lifecycle-hooks' }
+export const CONTEXT_SOURCE: MessageSource = { kind: 'dsh-lifecycle-hooks' }
 
 /** Reason used when a hook blocked the call without naming one. */
 const FALLBACK_DENY = 'denied by a lifecycle hook'
@@ -71,10 +71,15 @@ export function toolPrePlan(exec: ToolExecution, agent: Agent): DispatchPlan<Pre
 
 /**
  * Fold every hook's context into the one reminder message the model sees.
+ *
+ * Every event shares this shape: the plugin's own source kind, a user role, and
+ * one `<system-reminder>` block whose lines are already in configuration order.
+ * It is exported so later events reuse the fold instead of inventing a second
+ * message shape the model would read differently.
  * @param context - the lines, already in configuration order.
  * @returns the user-role message to inject.
  */
-function contextMessage(context: readonly string[]): UserMessage {
+export function contextMessage(context: readonly string[]): UserMessage {
   return createUserMessage({
     content: [{ type: 'text', text: `<system-reminder>\n${context.join('\n')}\n</system-reminder>` }],
     source: CONTEXT_SOURCE,
