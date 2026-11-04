@@ -7,21 +7,17 @@
  *   and each entry's `id` / `on` / `match` / `run` / `timeoutMs` / `onFailure`.
  *   A file-level problem rejects the whole file; an entry-level problem drops
  *   that entry with a warning and keeps the rest.
- * - {@link HookSources}, the per-Session file cache: re-stat before every use,
- *   re-read only when the stat changed, and keep the last valid snapshot when a
- *   newer file no longer parses. A malformed edit must not disable the rules a
- *   developer already had working.
+ * - {@link HookSources}, the per-file cache: re-stat before every use, re-read
+ *   only when the stat changed (or the watcher warmed a changed file), and keep
+ *   the last valid snapshot when a newer file no longer parses. A malformed
+ *   edit must not disable the rules a developer already had working.
  *
  * @module dsh-lifecycle-hooks/hooks-file
  */
 
 import { readFile, stat } from 'node:fs/promises'
-import { join } from 'node:path'
 import type { Hook, HookEvent } from './hook.ts'
 import { compileToolPattern, invalidArgPattern, isRecord, type HookMatch } from './match.ts'
-
-/** Path of the hooks file, relative to the Session's current directory. */
-export const HOOKS_FILE_PATH = join('.dsh', 'hooks.json')
 
 /** Hook events the format names; this build dispatches `tool.pre` only. */
 const KNOWN_EVENTS: ReadonlySet<string> = new Set<HookEvent>([
@@ -230,6 +226,7 @@ function parseRun(raw: unknown): RunParse {
  */
 export class HookSources {
   private readonly entries = new Map<string, CacheEntry>()
+  private readonly inflight = new Map<string, Promise<HookSnapshot | undefined>>()
 
   /** @param options - default timeout and the warning sink. */
   constructor(private readonly options: HookSourcesOptions) {}
@@ -239,7 +236,22 @@ export class HookSources {
    * @param source - absolute path of the file.
    * @returns the usable hooks, or `undefined` when there is no usable file.
    */
-  async load(source: string): Promise<HookSnapshot | undefined> {
+  load(source: string): Promise<HookSnapshot | undefined> {
+    // One read per file at a time: parallel tool calls in one step resolve
+    // concurrently, and a broken file must warn once, not once per call.
+    const running = this.inflight.get(source)
+    if (running !== undefined) return running
+    const attempt = this.read(source).finally(() => { this.inflight.delete(source) })
+    this.inflight.set(source, attempt)
+    return attempt
+  }
+
+  /**
+   * Read and validate one file, consulting the stat stamp first.
+   * @param source - absolute path of the file.
+   * @returns the usable hooks, or `undefined` when there is no usable file.
+   */
+  private async read(source: string): Promise<HookSnapshot | undefined> {
     const stamp = await this.stamp(source)
     if (stamp === undefined) {
       this.entries.delete(source)
@@ -265,6 +277,25 @@ export class HookSources {
     const snapshot: HookSnapshot = { source, hooks: parsed.hooks }
     this.entries.set(source, { stamp, snapshot })
     return snapshot
+  }
+
+  /**
+   * Re-read a file the watcher reported, so the layer is already parsed when
+   * the next event resolves it. Only files this loader has parsed before are
+   * refreshed: a watcher sees every change in a `.dsh` directory, and parsing
+   * an unrelated file there would turn its content into warnings.
+   *
+   * A refresh never discards the last valid parse: a broken edit keeps the
+   * layer's working rules, exactly as an edit noticed by the stat check does.
+   * @param source - absolute path the watcher reported, or `undefined` for every
+   * cached file when the platform did not name one.
+   */
+  async refresh(source?: string): Promise<void> {
+    const sources = source === undefined ? [...this.entries.keys()] : [source]
+    for (const path of sources) {
+      if (!this.entries.has(path)) continue
+      await this.load(path)
+    }
   }
 
   /** Warn about one file problem, keeping the message one line. */

@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "生命周期钩子",
-    "description": "从仓库的 .dsh/hooks.json 读声明式钩子：builtin deny 在工具执行前按名称与参数拦住调用。"
+    "description": "从用户级、项目级与 local 三层的 .dsh/hooks.json 发现声明式钩子：builtin deny 在工具执行前按名称与参数拦住调用，改文件后热重载。"
   }
 }
