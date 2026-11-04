@@ -31,6 +31,20 @@ deepseek-plugins/
    └─ market.yml                # 打 tag 后重建索引并部署 Pages
 ```
 
+## 本仓的插件
+
+下表每个包都是声明了 `dsh.bundle` 的可安装插件，装进 profile 后按行 id 覆盖配置
+（`packages/_template` 只是骨架，标记为 private，不进入市场）：
+
+| 包 | 形态 | 一句话 |
+|---|---|---|
+| `dsh-path-rules` | 仅宿主 | 按路径生效的 `.dsh/rules/` 规则；agent 碰到范围内的文件才注入对应约定 |
+| `dsh-worktree-switch` | 宿主 + 浏览器 | 把会话放进 Git worktree 的开关、面板与侧边栏入口 |
+| `dsh-lifecycle-hooks` | 仅宿主 | 仓库里的 `.dsh/hooks.json` 生命周期钩子：拦截/审批工具、改写结果、注入上下文、继续停下的 turn |
+
+`dsh-path-rules` 与 `dsh-lifecycle-hooks` 没有浏览器半：没有 `src/client/`、`dsh.client`
+与 `exports["./client"]`，`tsdown.config.ts` 也只跑 `hostConfig()`。
+
 ## 首次使用
 
 1. 根 `package.json` 的 `repository.url` 已指向本仓库；改名或 fork 时改这一行——市场索引的
