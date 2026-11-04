@@ -36,7 +36,10 @@ export type DispatchedHookEvent =
   | 'step.start'
   | 'tool.pre'
   | 'tool.post'
+  | 'tool.result'
   | 'turn.stop'
+  | 'session.end'
+  | 'notification'
 
 /**
  * Actions each dispatched event applies. This is the single authority the
@@ -54,13 +57,34 @@ export type DispatchedHookEvent =
  * - `turn.stop` continues the stopping turn for one more step; it has no
  *   blocking action at all, because halt belongs to the events that can stop
  *   work before it happens.
+ * - `tool.result`, `session.end`, and `notification` are observe-only: they
+ *   fire after the host has already committed the thing they report, so there
+ *   is no decision to apply. Their empty action list is what forces their
+ *   command handlers detached and rejects their builtin entries at load time.
  */
 export const EVENT_ACTIONS: Readonly<Record<DispatchedHookEvent, readonly HookAction[]>> = {
   'session.start': ['context'],
   'step.start': ['deny', 'context', 'halt'],
   'tool.pre': ['deny', 'ask', 'context', 'halt'],
   'tool.post': ['block', 'replace', 'context', 'halt'],
+  'tool.result': [],
   'turn.stop': ['continue'],
+  'session.end': [],
+  'notification': [],
+}
+
+/**
+ * Whether an event only observes.
+ *
+ * Observe-only events report something the host has already committed and have
+ * no decision to merge, so their command handlers never participate in the
+ * event: the loader forces them detached, and a builtin entry at one is a
+ * configuration mistake it skips with a warning.
+ * @param event - the lifecycle point to classify.
+ * @returns true for an event whose {@link EVENT_ACTIONS} list is empty.
+ */
+export function isObserveOnly(event: DispatchedHookEvent): boolean {
+  return EVENT_ACTIONS[event].length === 0
 }
 
 /** Handler kinds the `.dsh/hooks.json` vocabulary names. */

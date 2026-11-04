@@ -56,7 +56,22 @@ export interface HooksHarness {
    */
   answerApprovals(outcome: ApprovalOutcome): void
   /** Create a production Agent on one registered route. */
-  createAgent(route: string, cwd?: string): Promise<Agent>
+  createAgent(route: string, cwd?: string, meta?: AgentSessionMeta): Promise<Agent>
+  /**
+   * Dispose the AgentLoop fiber, which disposes every live Agent (and emits
+   * `agent/disposed`) while the hooks plugin stays mounted.
+   */
+  disposeAgents(): Promise<void>
+}
+
+/** Fresh-session lineage a test may put on an Agent's Session header. */
+export interface AgentSessionMeta {
+  /** Durable parent lineage, for a Session standing in for a delegated child. */
+  readonly parentSession?: SessionId
+  /** Product classification of a delegated child. */
+  readonly origin?: 'subagent'
+  /** Delegation depth persisted on the child's header. */
+  readonly delegationDepth?: number
 }
 
 /** Optional real-service stacks a test wants mounted next to the plugin. */
@@ -64,16 +79,17 @@ export interface HooksHarnessOptions {
   /** Mount the real bash tool stack (jobs, subprocess, shell env, executor, tool). */
   readonly bash?: boolean
   /**
+   * Mount the real approval service (`ctx.approval`), so a `tool.pre` `ask`
+   * reaches the host's own approval flow and an approval produces the durable
+   * `approval/asked` event. Omitted leaves the service unmounted: the
+   * deployment has no approval channel at all.
+   */
+  readonly approval?: boolean
+  /**
    * Directory to use as the user's `$DSH_HOME`; defaults to `<root>/.dsh-home`.
    * Every harness stubs the env so a test never reads the developer's real home.
    */
   readonly dshHome?: string
-  /**
-   * Mount the real approval service (`ctx.approval`), so a `tool.pre` `ask`
-   * reaches the host's own approval flow. Omitted leaves the service unmounted:
-   * the deployment has no approval channel at all.
-   */
-  readonly approval?: boolean
 }
 
 /**
@@ -94,7 +110,9 @@ export async function createHooksHarness(
   const dshHome = options.dshHome ?? dshHomeOf(root)
   vi.stubEnv('DSH_HOME', dshHome)
   await mountAgentLoopTestDependencies(ctx, { workingDirectory: true })
-  if (options.approval === true) await ctx.plugin(ApprovalService, {})
+  // One mount for both tickets' approval needs: the schema defaults `policy`
+  // to `ask`, and naming it keeps the interactive policy explicit.
+  if (options.approval === true) await ctx.plugin(ApprovalService, { policy: 'ask' })
   await ctx.plugin(ToolFs)
   if (options.bash === true) {
     await ctx.plugin(LocalJobRegistry)
@@ -106,7 +124,7 @@ export async function createHooksHarness(
   }
   // The Loader/schema supplies every default, so the harness only passes overrides.
   await ctx.plugin(DshLifecycleHooks, config as DshLifecycleHooks.Config)
-  await ctx.plugin(AgentLoop, { agents: [] })
+  const agentLoopFiber = await ctx.plugin(AgentLoop, { agents: [] })
   const warnings: string[] = []
   const pluginWarnings: string[] = []
   vi.spyOn(ctx.logger, 'warn').mockImplementation((...args: unknown[]) => {
@@ -133,13 +151,20 @@ export async function createHooksHarness(
       ctx.llm.registerAdapter([route], adapter)
       return adapter
     },
-    async createAgent(route, cwd = root) {
+    async createAgent(route, cwd = root, meta = {}) {
       sessions += 1
+      // The loop's `create` types its meta as `Pick<SessionHeader, 'cwd'>`; a
+      // variable carrying the extra lineage fields is assignable and reaches
+      // the Session store's prepare(), which folds them into the header.
+      const sessionMeta = { cwd, ...meta }
       return ctx.agentLoop.create(
         SessionId(`dsh-lifecycle-hooks-${String(sessions)}`),
         { provider: route, model: 'mock' },
-        { cwd },
+        sessionMeta,
       )
+    },
+    async disposeAgents() {
+      await agentLoopFiber.dispose()
     },
   }
 }
