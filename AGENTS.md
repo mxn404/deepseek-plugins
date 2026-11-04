@@ -46,6 +46,8 @@ pnpm market         # 生成 site/index.json：已发布包走 npm 源，未发�
   新增或改名包后要重新生成索引；稳定后优先发 npm，安装无需 `allowBuilds` 审批。
 - 浏览器半的 bundle 必须是 `window.__ModuleLoader__.load({ id, factory })` 形状，且
   `react` / `react-dom` / `@deepseek-ai/*` 保持 external，由页面模块表提供。
+- 合并插件改动后的完整发版与市场索引验证清单见 [`.dsh/rules/release.md`](.dsh/rules/release.md)；
+  dsh 会话会自动加载这条常驻规则，不需要每次提醒。
 
 ## 改动完成前
 
