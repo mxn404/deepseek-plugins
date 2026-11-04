@@ -33,13 +33,7 @@ import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deep
 import { contextMessage } from './context.ts'
 import type { DispatchPlan } from './dispatch.ts'
 import { EVENT_ACTIONS } from './hook.ts'
-import type { MergedDecision } from './outcome.ts'
-
-/** Reason used when a hook blocked the result without naming one. */
-const FALLBACK_BLOCK = 'blocked by a lifecycle hook'
-
-/** Reason used when a hook halted the turn without naming one. */
-const FALLBACK_HALT = 'halted by a lifecycle hook'
+import type { MergedOutcome } from './outcome.ts'
 
 /**
  * Build the `tool.post` plan for one finished call.
@@ -63,30 +57,29 @@ export function toolPostPlan(
         result: { is_error: result.isError, content: result.content },
       },
     },
-    apply(decision: MergedDecision): PostToolDecision | undefined {
-      if (decision.action === 'halt') {
-        const reason = decision.reason ?? FALLBACK_HALT
-        agent.cancel({ kind: 'hook', reason })
-        return { kind: 'block', feedback: textBlock(reason) }
+    apply(outcome: MergedOutcome): PostToolDecision | undefined {
+      if (outcome.action === 'halt') {
+        agent.cancel({ kind: 'hook', reason: outcome.reason })
+        return { kind: 'block', feedback: textBlock(outcome.reason) }
       }
       // One message for every hook's lines, in configuration order, shared with
       // `tool.pre` so the model reads the same shape at every event.
-      const contexts = decision.context.length === 0
+      const contexts = outcome.context.length === 0
         ? undefined
-        : [contextMessage(decision.context)]
-      if (decision.action === 'block') {
+        : [contextMessage(outcome.context)]
+      if (outcome.action === 'block') {
         return {
           kind: 'block',
-          feedback: textBlock(decision.reason ?? FALLBACK_BLOCK),
+          feedback: textBlock(outcome.reason),
           ...contexts === undefined ? {} : { additionalContexts: contexts },
         }
       }
-      if (decision.action === 'replace' && decision.replace !== undefined) {
+      if (outcome.action === 'replace') {
         return {
           // Content-only accept: the tool's `value` keeps whatever the tool
           // actually returned, which is the only shape the host re-validates.
           kind: 'accept',
-          content: textBlock(decision.replace.text),
+          content: textBlock(outcome.replace.text),
           ...contexts === undefined ? {} : { additionalContexts: contexts },
         }
       }

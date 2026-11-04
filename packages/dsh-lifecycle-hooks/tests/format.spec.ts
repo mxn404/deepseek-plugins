@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { Config } from '../src/config.ts'
-import type { HookDecision } from '../src/hook.ts'
+import type { HookOutcome } from '../src/hook.ts'
 import type { HookRun } from '../src/handler.ts'
 import { parseHooks } from '../src/hooks-file.ts'
 import {
@@ -21,7 +21,7 @@ import {
   matchesToolName,
   type ToolPattern,
 } from '../src/match.ts'
-import { allowedDecisions, mergeDecisions } from '../src/outcome.ts'
+import { allowedOutcomes, mergeOutcomes } from '../src/outcome.ts'
 
 const DEFAULTS = 30_000
 
@@ -577,8 +577,8 @@ describe('the match vocabulary', () => {
   })
 })
 
-describe('merging one event’s decisions', () => {
-  const run = (id: string, decision?: HookDecision, error?: string): HookRun => ({
+describe('merging one event’s outcomes', () => {
+  const run = (id: string, outcome?: HookOutcome, error?: string): HookRun => ({
     hook: {
       id,
       on: 'tool.pre',
@@ -590,32 +590,32 @@ describe('merging one event’s decisions', () => {
     source: '/repo/.dsh/hooks.json',
     event: 'tool.pre',
     handler: 'builtin',
-    decision,
+    outcome,
     error,
     durationMs: 1,
     exitCode: undefined,
   })
 
   it('is undefined when no run decided anything', () => {
-    expect(mergeDecisions([])).toBeUndefined()
-    expect(mergeDecisions([run('observer')])).toBeUndefined()
-    expect(mergeDecisions([run('empty-context', { context: [] })])).toBeUndefined()
+    expect(mergeOutcomes([])).toBeUndefined()
+    expect(mergeOutcomes([run('observer')])).toBeUndefined()
+    expect(mergeOutcomes([run('empty-context', { context: [] })])).toBeUndefined()
   })
 
   it('takes the first denial in configuration order', () => {
-    expect(mergeDecisions([
+    expect(mergeOutcomes([
       run('first', { action: 'deny', reason: 'one' }),
       run('second', { action: 'deny', reason: 'two' }),
     ])).toEqual({ action: 'deny', reason: 'one', context: [] })
   })
 
   it('fills a missing denial reason', () => {
-    expect(mergeDecisions([run('quiet', { action: 'deny' })]))
+    expect(mergeOutcomes([run('quiet', { action: 'deny' })]))
       .toEqual({ action: 'deny', reason: 'denied by a lifecycle hook', context: [] })
   })
 
   it('lets a later halt outrank an earlier denial', () => {
-    expect(mergeDecisions([
+    expect(mergeOutcomes([
       run('deny', { action: 'deny', reason: 'nope' }),
       run('halt', { action: 'halt', reason: 'stop the turn' }),
     ])).toEqual({ action: 'halt', reason: 'stop the turn', context: [] })
@@ -624,14 +624,14 @@ describe('merging one event’s decisions', () => {
   it('keeps a halt ahead of a later denial', () => {
     // Only a halt stops later handlers, but the merge ranking must not depend
     // on that: halt wins wherever it appears.
-    expect(mergeDecisions([
+    expect(mergeOutcomes([
       run('halt', { action: 'halt', reason: 'stop' }),
       run('deny', { action: 'deny', reason: 'nope' }),
     ])).toEqual({ action: 'halt', reason: 'stop', context: [] })
   })
 
   it('concatenates every context in configuration order', () => {
-    expect(mergeDecisions([
+    expect(mergeOutcomes([
       run('one', { action: 'deny', reason: 'no', context: ['first', 'second'] }),
       run('two', { context: ['third'] }),
       run('three', { action: 'deny', reason: 'later', context: ['fourth'] }),
@@ -639,7 +639,7 @@ describe('merging one event’s decisions', () => {
   })
 
   it('keeps the last meta in configuration order', () => {
-    expect(mergeDecisions([
+    expect(mergeOutcomes([
       run('one', { action: 'deny', reason: 'no', meta: { rule: 'no-rm' } }),
       run('two', { context: ['a note'], meta: { rule: 'no-rm', severity: 2 } }),
     ])).toEqual({
@@ -651,29 +651,29 @@ describe('merging one event’s decisions', () => {
   })
 
   it('returns a meta-only outcome when nothing else decided', () => {
-    expect(mergeDecisions([run('meta', { meta: { took: 3 } })]))
+    expect(mergeOutcomes([run('meta', { meta: { took: 3 } })]))
       .toEqual({ context: [], meta: { took: 3 } })
   })
 
   it('returns context alone when no hook blocked the event', () => {
-    expect(mergeDecisions([run('note', { context: ['just so you know'] })]))
+    expect(mergeOutcomes([run('note', { context: ['just so you know'] })]))
       .toEqual({ context: ['just so you know'] })
   })
 
-  it('ignores a failed run that contributed no decision', () => {
+  it('ignores a failed run that contributed no outcome', () => {
     const failed = run('broken', undefined, 'boom')
-    expect(mergeDecisions([failed, run('later', { action: 'deny', reason: 'two' })]))
+    expect(mergeOutcomes([failed, run('later', { action: 'deny', reason: 'two' })]))
       .toEqual({ action: 'deny', reason: 'two', context: [] })
   })
 
   /** The same run helper, for a `tool.post` entry. */
-  const post = (id: string, decision?: HookDecision): HookRun => ({
-    ...run(id, decision),
+  const post = (id: string, outcome?: HookOutcome): HookRun => ({
+    ...run(id, outcome),
     event: 'tool.post',
   })
 
   it('lets a block outrank a replace and keeps every context', () => {
-    expect(mergeDecisions([
+    expect(mergeOutcomes([
       post('redact', { action: 'replace', replace: { text: 'clean' }, context: ['first'] }),
       post('block', { action: 'block', reason: 'do not read this', context: ['second'] }),
     ])).toEqual({
@@ -684,7 +684,7 @@ describe('merging one event’s decisions', () => {
   })
 
   it('takes the last replace in configuration order', () => {
-    expect(mergeDecisions([
+    expect(mergeOutcomes([
       post('first', { action: 'replace', replace: { text: 'first text' } }),
       post('second', { action: 'replace', replace: { text: 'second text' } }),
     ])).toEqual({
@@ -695,35 +695,35 @@ describe('merging one event’s decisions', () => {
   })
 
   it('returns a replace alone when nothing blocked the event', () => {
-    expect(mergeDecisions([post('redact', { action: 'replace', replace: { text: 'clean' } })]))
+    expect(mergeOutcomes([post('redact', { action: 'replace', replace: { text: 'clean' } })]))
       .toEqual({ action: 'replace', replace: { text: 'clean' }, context: [] })
   })
 
   it('fills a missing block reason', () => {
-    expect(mergeDecisions([post('quiet', { action: 'block' })]))
+    expect(mergeOutcomes([post('quiet', { action: 'block' })]))
       .toEqual({ action: 'block', reason: 'blocked by a lifecycle hook', context: [] })
   })
 
-  it('keeps a synthesized blocking decision that accompanies a failure', () => {
+  it('keeps a synthesized blocking outcome that accompanies a failure', () => {
     // `onFailure: "block"` records the failure and a denial in the same run;
     // the merge must honour the denial instead of discarding the whole run.
     const blocked = run('broken', { action: 'deny', reason: 'hook "broken" failed: boom' }, 'boom')
-    expect(mergeDecisions([blocked]))
+    expect(mergeOutcomes([blocked]))
       .toEqual({ action: 'deny', reason: 'hook "broken" failed: boom', context: [] })
   })
 
   it('returns continue alone when no hook blocked the event', () => {
-    expect(mergeDecisions([run('keep', { action: 'continue', reason: 'fix the tests' })]))
+    expect(mergeOutcomes([run('keep', { action: 'continue', reason: 'fix the tests' })]))
       .toEqual({ action: 'continue', reason: 'fix the tests', context: [] })
   })
 
   it('still continues when the continue hook gave no reason', () => {
-    expect(mergeDecisions([run('quiet', { action: 'continue' })]))
+    expect(mergeOutcomes([run('quiet', { action: 'continue' })]))
       .toEqual({ action: 'continue', context: [] })
   })
 
   it('joins every continue reason in configuration order', () => {
-    expect(mergeDecisions([
+    expect(mergeOutcomes([
       run('one', { action: 'continue', reason: 'first reason' }),
       run('two', { action: 'continue', reason: '  ', context: ['second context'] }),
       run('three', { action: 'continue', reason: 'third reason' }),
@@ -735,17 +735,17 @@ describe('merging one event’s decisions', () => {
   })
 
   it('asks when no blocking action outranks the ask', () => {
-    expect(mergeDecisions([run('confirm', { action: 'ask', reason: 'write to .env?', context: ['one'] })]))
+    expect(mergeOutcomes([run('confirm', { action: 'ask', reason: 'write to .env?', context: ['one'] })]))
       .toEqual({ action: 'ask', reason: 'write to .env?', context: ['one'] })
   })
 
   it('fills a missing ask reason', () => {
-    expect(mergeDecisions([run('quiet', { action: 'ask' })]))
+    expect(mergeOutcomes([run('quiet', { action: 'ask' })]))
       .toEqual({ action: 'ask', reason: 'a lifecycle hook asked for confirmation', context: [] })
   })
 
   it('carries the winning ask’s display copy', () => {
-    expect(mergeDecisions([run('confirm', {
+    expect(mergeOutcomes([run('confirm', {
       action: 'ask',
       reason: 'write to .env?',
       displayReason: { en: 'Allow writing to .env?', zh: '允许写入 .env 吗？' },
@@ -761,23 +761,23 @@ describe('merging one event’s decisions', () => {
     ['an ask before a deny', ['ask', 'deny']],
     ['a deny before an ask', ['deny', 'ask']],
   ])('lets a deny outrank %s', (_label, order) => {
-    const decisions: Record<string, HookDecision> = {
+    const outcomes: Record<string, HookOutcome> = {
       ask: { action: 'ask', reason: 'may I?' },
       deny: { action: 'deny', reason: 'not allowed' },
     }
-    expect(mergeDecisions(order.map((action, index) => run(String(index), decisions[action]))))
+    expect(mergeOutcomes(order.map((action, index) => run(String(index), outcomes[action]))))
       .toEqual({ action: 'deny', reason: 'not allowed', context: [] })
   })
 
   it('lets an ask outrank a continue', () => {
-    expect(mergeDecisions([
+    expect(mergeOutcomes([
       run('keep', { action: 'continue', reason: 'go on' }),
       run('confirm', { action: 'ask', reason: 'may I?' }),
     ])).toEqual({ action: 'ask', reason: 'may I?', context: [] })
   })
 
   it('lets a blocking action outrank a continue', () => {
-    expect(mergeDecisions([
+    expect(mergeOutcomes([
       run('keep', { action: 'continue', reason: 'go on' }),
       run('deny', { action: 'deny', reason: 'no' }),
     ])).toEqual({ action: 'deny', reason: 'no', context: [] })
@@ -785,7 +785,7 @@ describe('merging one event’s decisions', () => {
 })
 
 describe('filtering actions an event does not support', () => {
-  const run = (id: string, decision: HookDecision): HookRun => ({
+  const run = (id: string, outcome: HookOutcome): HookRun => ({
     hook: {
       id,
       on: 'tool.pre',
@@ -797,7 +797,7 @@ describe('filtering actions an event does not support', () => {
     source: '/repo/.dsh/hooks.json',
     event: 'tool.pre',
     handler: 'command',
-    decision,
+    outcome,
     error: undefined,
     durationMs: 1,
     exitCode: 0,
@@ -805,12 +805,12 @@ describe('filtering actions an event does not support', () => {
 
   it('drops an unsupported action, warns about it, and keeps the hook’s context', () => {
     const warnings: string[] = []
-    const filtered = allowedDecisions(
+    const filtered = allowedOutcomes(
       [run('asker', { action: 'ask', reason: 'may I?', context: ['one'] })],
       ['deny', 'context', 'halt'],
       message => warnings.push(message),
     )
-    expect(filtered[0]?.decision).toEqual({ context: ['one'] })
+    expect(filtered[0]?.outcome).toEqual({ context: ['one'] })
     expect(warnings).toHaveLength(1)
     expect(warnings[0]).toContain('asker')
     expect(warnings[0]).toContain('"ask"')
@@ -819,20 +819,20 @@ describe('filtering actions an event does not support', () => {
 
   it('passes a supported action through untouched', () => {
     const warnings: string[] = []
-    const decision = { action: 'deny', reason: 'no' } as const
-    expect(allowedDecisions([run('gate', decision)], ['deny'], message => warnings.push(message))[0]?.decision)
-      .toEqual(decision)
+    const outcome = { action: 'deny', reason: 'no' } as const
+    expect(allowedOutcomes([run('gate', outcome)], ['deny'], message => warnings.push(message))[0]?.outcome)
+      .toEqual(outcome)
     expect(warnings).toEqual([])
   })
 
   it('drops the replacement with an unsupported replace action', () => {
     const warnings: string[] = []
-    const filtered = allowedDecisions(
+    const filtered = allowedOutcomes(
       [run('redactor', { action: 'replace', replace: { text: 'clean' }, context: ['kept'] })],
       ['deny', 'context', 'halt'],
       message => warnings.push(message),
     )
-    expect(filtered[0]?.decision).toEqual({ context: ['kept'] })
+    expect(filtered[0]?.outcome).toEqual({ context: ['kept'] })
     expect(warnings).toHaveLength(1)
     expect(warnings[0]).toContain('"replace"')
   })

@@ -18,7 +18,7 @@ import type { Agent, SessionStartSource } from '@deepseek-ai/dsh-agent'
 import { contextMessage } from './context.ts'
 import type { DispatchPlan } from './dispatch.ts'
 import { EVENT_ACTIONS } from './hook.ts'
-import type { MergedDecision } from './outcome.ts'
+import type { MergedOutcome } from './outcome.ts'
 
 /**
  * Build the `session.start` plan for one new agent.
@@ -36,11 +36,11 @@ export function sessionStartPlan(agent: Agent, source: SessionStartSource): Disp
       // that payload key for this event; `hook_id` still identifies the entry.
       fields: { source },
     },
-    apply(decision: MergedDecision): undefined {
-      if (decision.context.length === 0) return undefined
+    apply(outcome: MergedOutcome): undefined {
+      if (outcome.context.length === 0) return undefined
       // The first pre-step claims the next-step inbox, so this lands on the
       // first request instead of a later wake-up.
-      agent.inject(contextMessage(decision.context))
+      agent.inject(contextMessage(outcome.context))
       return undefined
     },
   }

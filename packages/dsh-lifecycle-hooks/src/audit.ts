@@ -28,13 +28,14 @@ import { appendFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { appendPluginRecord, type Session } from '@deepseek-ai/dsh-session'
 import type { HookRun } from './handler.ts'
+import { messageOf } from './message.ts'
 import type { HookAction, HookEvent, HookHandlerKind } from './hook.ts'
 
 /**
  * Payload of one `plugin:dsh-lifecycle-hooks/run` record.
  *
  * `duration_ms` is rounded to whole milliseconds; `error` appears only on a
- * failed run, and `action` only on a run that produced a decision.
+ * failed run, and `action` only on a run that produced an outcome.
  */
 export interface HookRunRecord {
   /** Lifecycle point the hook ran at. */
@@ -132,8 +133,8 @@ export function recordHookRun(session: Session, run: HookRun, options: AuditOpti
  * @returns the record payload.
  */
 function buildRecord(run: HookRun, continuedCount?: number): HookRunRecord {
-  const action = run.decision?.action
-  const meta = run.decision?.meta
+  const action = run.outcome?.action
+  const meta = run.outcome?.meta
   return {
     event: run.event,
     source: run.source,
@@ -167,13 +168,4 @@ function appendFallback(record: HookRunRecord, options: AuditOptions, error: unk
   if (warnedFallbacks.has(path)) return
   warnedFallbacks.add(path)
   options.warn(`hook run for "${record.hook_id}" was not recorded (${messageOf(error)}); ${detail}`)
-}
-
-/**
- * Render one caught value for a warning line.
- * @param error - anything thrown.
- * @returns a single-line description.
- */
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }

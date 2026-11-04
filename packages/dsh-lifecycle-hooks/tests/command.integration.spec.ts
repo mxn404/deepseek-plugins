@@ -383,7 +383,7 @@ emit({ action: 'deny', reason: 'the detached hook denies' })
 
     await runTurn(agent)
 
-    // The tool ran: a detached hook's outcome is not part of the decision.
+    // The tool ran: a detached hook's outcome is not part of the event's outcome.
     await expect(access(join(root, 'ran.txt'))).resolves.toBeUndefined()
     expect(requestText(adapter.requests[1]!)).not.toContain('the detached hook denies')
     // The turn finished before the detached run did.

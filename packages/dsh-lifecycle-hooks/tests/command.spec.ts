@@ -13,8 +13,8 @@ import { decodeOutcome, runCommand } from '../src/command.ts'
 
 describe('the command stdout contract', () => {
   it('treats empty output as no action', () => {
-    expect(decodeOutcome('')).toEqual({ decision: undefined, error: undefined })
-    expect(decodeOutcome('  \n\t\n')).toEqual({ decision: undefined, error: undefined })
+    expect(decodeOutcome('')).toEqual({ outcome: undefined, error: undefined })
+    expect(decodeOutcome('  \n\t\n')).toEqual({ outcome: undefined, error: undefined })
   })
 
   it('reads a deny with its reason and context', () => {
@@ -23,7 +23,7 @@ describe('the command stdout contract', () => {
       reason: 'rm -rf is blocked',
       context: ['the repository forbids recursive deletes'],
     }))).toEqual({
-      decision: {
+      outcome: {
         action: 'deny',
         reason: 'rm -rf is blocked',
         context: ['the repository forbids recursive deletes'],
@@ -34,14 +34,14 @@ describe('the command stdout contract', () => {
 
   it('reads context without an action', () => {
     expect(decodeOutcome('{"context":["lint is configured for this repo"]}')).toEqual({
-      decision: { context: ['lint is configured for this repo'] },
+      outcome: { context: ['lint is configured for this repo'] },
       error: undefined,
     })
   })
 
   it('reads a bare replace as replacing the model-visible text', () => {
     expect(decodeOutcome('{"replace":{"text":"REDACTED"}}')).toEqual({
-      decision: { action: 'replace', replace: { text: 'REDACTED' } },
+      outcome: { action: 'replace', replace: { text: 'REDACTED' } },
       error: undefined,
     })
   })
@@ -51,7 +51,7 @@ describe('the command stdout contract', () => {
       replace: { text: 'token=[REDACTED]' },
       context: ['secrets are redacted before the model reads tool output'],
     }))).toEqual({
-      decision: {
+      outcome: {
         action: 'replace',
         replace: { text: 'token=[REDACTED]' },
         context: ['secrets are redacted before the model reads tool output'],
@@ -61,14 +61,14 @@ describe('the command stdout contract', () => {
   })
 
   it('reads an explicit replace action with its text', () => {
-    expect(decodeOutcome('{"action":"replace","replace":{"text":"clean"}}').decision)
+    expect(decodeOutcome('{"action":"replace","replace":{"text":"clean"}}').outcome)
       .toEqual({ action: 'replace', replace: { text: 'clean' } })
   })
 
   it('reads every action the vocabulary knows, leaving event legality to the dispatcher', () => {
-    expect(decodeOutcome('{"action":"ask","reason":"needs a human"}').decision)
+    expect(decodeOutcome('{"action":"ask","reason":"needs a human"}').outcome)
       .toEqual({ action: 'ask', reason: 'needs a human' })
-    expect(decodeOutcome('{"action":"halt","reason":"stop"}').decision)
+    expect(decodeOutcome('{"action":"halt","reason":"stop"}').outcome)
       .toEqual({ action: 'halt', reason: 'stop' })
   })
 
@@ -78,7 +78,7 @@ describe('the command stdout contract', () => {
       reason: 'the command deletes files',
       displayReason: { en: 'Allow this command?', zh: '允许执行这条命令吗？' },
     }))).toEqual({
-      decision: {
+      outcome: {
         action: 'ask',
         reason: 'the command deletes files',
         displayReason: { en: 'Allow this command?', zh: '允许执行这条命令吗？' },
@@ -93,7 +93,7 @@ describe('the command stdout contract', () => {
       reason: 'rm -rf is blocked',
       meta: { rule: 'no-rm', severity: 2, tags: ['safety', null] },
     }))).toEqual({
-      decision: {
+      outcome: {
         action: 'deny',
         reason: 'rm -rf is blocked',
         meta: { rule: 'no-rm', severity: 2, tags: ['safety', null] },
@@ -104,13 +104,13 @@ describe('the command stdout contract', () => {
 
   it('reads a meta-only outcome instead of dropping it', () => {
     expect(decodeOutcome('{"meta":{"took":3}}')).toEqual({
-      decision: { meta: { took: 3 } },
+      outcome: { meta: { took: 3 } },
       error: undefined,
     })
   })
 
   it('tolerates a JSON object with no outcome fields', () => {
-    expect(decodeOutcome('{}')).toEqual({ decision: undefined, error: undefined })
+    expect(decodeOutcome('{}')).toEqual({ outcome: undefined, error: undefined })
   })
 
   it.each([
@@ -137,7 +137,7 @@ describe('the command stdout contract', () => {
     ['a non-string localized display reason', '{"action":"ask","displayReason":{"en":"yes","zh":2}}', '"displayReason"'],
   ])('rejects %s', (_label, stdout, expected) => {
     const decoded = decodeOutcome(stdout)
-    expect(decoded.decision).toBeUndefined()
+    expect(decoded.outcome).toBeUndefined()
     expect(decoded.error).toContain(expected)
   })
 })
@@ -170,7 +170,7 @@ describe('running a command through the shell seam', () => {
       timeoutMs: 1_000,
       signal,
     })).toEqual({
-      decision: undefined,
+      outcome: undefined,
       exitCode: undefined,
       error: 'the shell service is not available',
     })
@@ -189,7 +189,7 @@ describe('running a command through the shell seam', () => {
       timeoutMs: 1_000,
       signal,
     })).toEqual({
-      decision: undefined,
+      outcome: undefined,
       exitCode: undefined,
       error: 'the command could not be started: spawn ENOENT: no such directory',
     })
@@ -216,7 +216,7 @@ describe('running a command through the shell seam', () => {
       timeoutMs: 1_000,
       signal,
     })).toEqual({
-      decision: undefined,
+      outcome: undefined,
       exitCode: undefined,
       error: 'timed out after 1000 ms',
     })

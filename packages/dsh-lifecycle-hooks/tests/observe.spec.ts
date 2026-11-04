@@ -2,7 +2,7 @@
  * Contract spec for the observe-only events: `tool.result`, `session.end`, and
  * `notification`.
  *
- * These events have no decision to apply, so their whole format contract is
+ * These events have no outcome to apply, so their whole format contract is
  * "a command observer, never a builtin action": a command is detached whether
  * or not it says `async: true`, and a builtin entry is skipped at load time
  * with a warning. The payloads and what a command does with them are covered
@@ -59,7 +59,7 @@ describe('the observe-only event vocabulary', () => {
   )
 
   it.each(['tool.result', 'session.end', 'notification'] as const)(
-    'skips a %s builtin action with a warning, because there is no decision to apply',
+    'skips a %s builtin action with a warning, because there is no outcome to apply',
     (on) => {
       const parsed = parseEntry({
         id: 'observer',

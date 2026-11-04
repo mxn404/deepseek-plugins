@@ -3,7 +3,7 @@
  *
  * These are the pure parts of the two events later tickets build on: the
  * per-event `match` dimensions, the builtin actions each event accepts, the
- * prompt a claimed batch carries, and the blocking decision a failed run
+ * prompt a claimed batch carries, and the blocking outcome a failed run
  * synthesizes. They are table-tested without a host; what the model actually
  * receives is covered by `session-step.integration.spec.ts`.
  */
@@ -11,7 +11,7 @@
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { describe, expect, it } from 'vitest'
 import { parseHooks } from '../src/hooks-file.ts'
-import { failureDecision } from '../src/outcome.ts'
+import { failureOutcome } from '../src/outcome.ts'
 import { promptOf } from '../src/step-start.ts'
 
 const DEFAULTS = 30_000
@@ -235,18 +235,18 @@ describe('the builtin action vocabulary', () => {
 
 describe('failure policy', () => {
   it('synthesizes a denial for a failed step.start hook', () => {
-    expect(failureDecision('step.start', 'gate', 'boom')).toEqual({
+    expect(failureOutcome('step.start', 'gate', 'boom')).toEqual({
       action: 'deny',
       reason: 'hook "gate" failed: boom',
     })
   })
 
   it('has no blocking outcome for session.start', () => {
-    expect(failureDecision('session.start', 'notes', 'boom')).toBeUndefined()
+    expect(failureOutcome('session.start', 'notes', 'boom')).toBeUndefined()
   })
 
   it('still denies tool.pre', () => {
-    expect(failureDecision('tool.pre', 'gate', 'boom')).toEqual({
+    expect(failureOutcome('tool.pre', 'gate', 'boom')).toEqual({
       action: 'deny',
       reason: 'hook "gate" failed: boom',
     })

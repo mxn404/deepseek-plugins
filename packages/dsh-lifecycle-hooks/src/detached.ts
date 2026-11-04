@@ -2,7 +2,7 @@
  * Quiescence tracking for detached (`async: true`) command runs.
  *
  * A detached hook is a run nobody awaits: it never contributes to the event's
- * decision, so the event proceeds while the process is still alive. Its work
+ * outcome, so the event proceeds while the process is still alive. Its work
  * must not outlive the plugin instance, though, so every such run is registered
  * here and the plugin's disposer drains this tracker: the shared signal aborts,
  * `ctx.shell` kills each process group, and disposal resolves only once every

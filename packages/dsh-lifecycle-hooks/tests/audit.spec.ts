@@ -43,7 +43,7 @@ function run(overrides: Partial<HookRun> = {}): HookRun {
     source: '/repo/.dsh/hooks.json',
     event: 'tool.pre',
     handler: 'builtin',
-    decision: { action: 'deny', reason: 'because', meta: { rule: 'no-rm', severity: 2 } },
+    outcome: { action: 'deny', reason: 'because', meta: { rule: 'no-rm', severity: 2 } },
     error: undefined,
     durationMs: 3,
     exitCode: undefined,

@@ -4,21 +4,21 @@
  * Tickets add events, not pipeline steps. For one event this module owns the
  * whole sequence — resolve the Session's layers, select the entries bound to
  * that event, run them in configuration order, record every run, merge the
- * outcomes, and hand the merged decision to the event's own applier — so a new
+ * outcomes, and hand the merged outcome to the event's own applier — so a new
  * event only supplies a {@link DispatchPlan}: what it matches, what it puts in
- * the payload, which actions it supports, and how the decision reaches the host
+ * the payload, which actions it supports, and how the outcome reaches the host
  * seam. This build registers a plan for `session.start`, `step.start`,
  * `tool.pre`, `tool.post`, `tool.result`, `turn.stop`, `session.end`, and
  * `notification`; the last three are observe-only and dispatch detached runs
- * that can never contribute a decision.
+ * that can never contribute an outcome.
  *
  * Two rules are enforced here for every event:
  *
  * - a run that failed (or timed out) is recorded and warned about, contributes
- *   no decision, and becomes the entry's `onFailure: "block"` outcome when it
+ *   no outcome, and becomes the entry's `onFailure: "block"` outcome when it
  *   asked for one;
- * - only `halt` stops later handlers; every other decision runs to the end and
- *   is ranked by {@link mergeDecisions}.
+ * - only `halt` stops later handlers; every other outcome runs to the end and
+ *   is ranked by {@link mergeOutcomes}.
  *
  * @module dsh-lifecycle-hooks/dispatch
  */
@@ -31,11 +31,12 @@ import type { HookResolver, ResolvedHooks } from './discovery.ts'
 import type { HookRun, HandlerShell } from './handler.ts'
 import { executeHook } from './handler.ts'
 import type { Hook, HookAction, HookEvent } from './hook.ts'
+import { messageOf } from './message.ts'
 import { isDetached } from './hook.ts'
 import type { HookMatch } from './match.ts'
 import { matchesHook } from './match.ts'
-import type { MergedDecision } from './outcome.ts'
-import { allowedDecisions, failureDecision, mergeDecisions } from './outcome.ts'
+import type { MergedOutcome } from './outcome.ts'
+import { allowedOutcomes, failureOutcome, mergeOutcomes } from './outcome.ts'
 import type { PayloadFacts } from './payload.ts'
 import { commandEnv, commandPayload } from './payload.ts'
 
@@ -96,13 +97,13 @@ export interface DispatchPlan<TApplied> {
   /** The call this event dispatches. */
   readonly subject: DispatchSubject
   /**
-   * Apply the merged decision, or return `undefined` to leave the host's own
+   * Apply the merged outcome, or return `undefined` to leave the host's own
    * behaviour untouched. Asynchronous appliers are for events whose fold has
    * to delegate down the host's own waterfall first (`step.start`).
-   * @param decision - the ranked outcome of every run.
+   * @param outcome - the ranked outcome of every run.
    * @returns the value the host seam consumes, when the event has one.
    */
-  apply(decision: MergedDecision): TApplied | undefined | Promise<TApplied | undefined>
+  apply?(outcome: MergedOutcome): TApplied | undefined | Promise<TApplied | undefined>
 }
 
 /** What the dispatcher needs from the plugin instance that owns it. */
@@ -137,8 +138,8 @@ export class HookDispatcher {
    * A discovery failure fails open: the event proceeds exactly as if no hooks
    * were configured, with one warning.
    * @param call - the event's own facts.
-   * @param plan - how the event selects hooks and applies its decision.
-   * @returns the event's decision, or `undefined` to leave the host's behaviour alone.
+   * @param plan - how the event selects hooks and applies its outcome.
+   * @returns the event's applied outcome, or `undefined` to leave the host's behaviour alone.
    */
   async dispatch<TApplied>(
     call: DispatchCall,
@@ -169,15 +170,15 @@ export class HookDispatcher {
         runs.push(run)
         // An illegal action is ignored later, so it must not stop the hooks
         // behind it either: only a halt this event can apply ends the loop.
-        if (run.decision?.action === 'halt' && plan.actions.includes('halt')) break handlers
+        if (run.outcome?.action === 'halt' && plan.actions.includes('halt')) break handlers
       }
     }
 
     this.record(call.session, runs, call.cwd, call.continuedCount)
-    const merged = mergeDecisions(allowedDecisions(runs, plan.actions, this.options.warn))
+    const merged = mergeOutcomes(allowedOutcomes(runs, plan.actions, this.options.warn))
     if (merged === undefined) return undefined
     if (call.signal.aborted) return undefined
-    return await plan.apply(merged)
+    return await plan.apply?.(merged)
   }
 
   /**
@@ -218,7 +219,7 @@ export class HookDispatcher {
   }
 
   /**
-   * Run one detached hook and record it, without touching the event's decision.
+   * Run one detached hook and record it, without touching the event's outcome.
    * @param hook - the entry to run.
    * @param source - absolute path of its hooks file.
    * @param call - the dispatching event's facts.
@@ -234,8 +235,8 @@ export class HookDispatcher {
     if (run.error !== undefined) {
       this.options.warn(`hook "${hook.id}" at ${plan.event} failed: ${run.error}`)
     }
-    this.reportDetachedDecision(plan, run)
-    // The event never sees this decision; the record still says what the run
+    this.reportDetachedOutcome(plan, run)
+    // The event never sees this outcome; the record still says what the run
     // produced, which is the only trace a detached outcome leaves.
     this.record(call.session, [run], call.cwd, call.continuedCount)
   }
@@ -243,7 +244,7 @@ export class HookDispatcher {
   /**
    * Warn when a detached run produced something the event cannot apply.
    *
-   * An observe-only event has no decision to merge, so a script that still
+   * An observe-only event has no outcome to merge, so a script that still
    * writes an outcome is reporting a misunderstanding; the same is true of an
    * action the event does not list. The run itself is kept: its side effect and
    * its audit row are the observable trace, and the warning is the only way a
@@ -251,10 +252,10 @@ export class HookDispatcher {
    * @param plan - the event's plan.
    * @param run - the detached run that settled.
    */
-  private reportDetachedDecision(plan: DispatchPlan<unknown>, run: HookRun): void {
-    const decision = run.decision
-    if (decision === undefined) return
-    const action = decision.action
+  private reportDetachedOutcome(plan: DispatchPlan<unknown>, run: HookRun): void {
+    const outcome = run.outcome
+    if (outcome === undefined) return
+    const action = outcome.action
     if (plan.actions.length === 0) {
       const reported = action === undefined ? 'an outcome' : `action "${action}"`
       this.options.warn(
@@ -272,14 +273,14 @@ export class HookDispatcher {
   /**
    * Apply an entry's failure policy to one run.
    * @param run - the run that may have failed.
-   * @returns the run, with a synthesized decision when it asked to block.
+   * @returns the run, with a synthesized outcome when it asked to block.
    */
   private settle(run: HookRun): HookRun {
     if (run.error === undefined) return run
     this.options.warn(`hook "${run.hook.id}" at ${run.event} failed: ${run.error}`)
     if (run.hook.onFailure !== 'block') return run
-    const decision = failureDecision(run.event, run.hook.id, run.error)
-    return decision === undefined ? run : { ...run, decision }
+    const outcome = failureOutcome(run.event, run.hook.id, run.error)
+    return outcome === undefined ? run : { ...run, outcome }
   }
 
   /**
@@ -333,13 +334,4 @@ function selects(match: HookMatch | undefined, subject: MatchSubject): boolean {
       if (match.tool !== undefined || match.args !== undefined) return false
       return match.prompt === undefined || match.prompt === (subject.prompt !== null)
   }
-}
-
-/**
- * Render one caught value for a warning line.
- * @param error - anything thrown.
- * @returns a single-line description.
- */
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }

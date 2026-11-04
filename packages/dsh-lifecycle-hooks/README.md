@@ -208,7 +208,7 @@ overlay 里这一行的 `name` 要写成插件包的绝对路径，否则从仓�
 
 五个事件参与决策，三个只观察。`session.start` 只能加 context，`turn.stop` 只能
 `continue`；`tool.result` / `session.end` / `notification` 发生在宿主已经提交事实之后，
-没有可应用的 decision，它们的 command/module **一律强制脱手**，builtin 条目在加载时跳过。
+没有可应用的 outcome，它们的 command/module **一律强制脱手**，builtin 条目在加载时跳过。
 
 | 事件 | dsh 扩展点 | match 维度 | 可用 outcome | 阶段与可观测性 |
 |---|---|---|---|---|

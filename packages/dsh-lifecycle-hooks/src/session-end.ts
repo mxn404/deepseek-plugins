@@ -79,10 +79,5 @@ export function sessionEndPlan(facts: SessionEndFacts): DispatchPlan<undefined> 
         ...facts.reason === undefined ? {} : { reason: facts.reason },
       },
     },
-    // No run can contribute a decision at an observe-only event; this applier
-    // exists only to satisfy the plan shape and never reaches the host.
-    apply(): undefined {
-      return undefined
-    },
   }
 }
