@@ -10,7 +10,7 @@
  */
 
 import { lstat, stat } from 'node:fs/promises'
-import { basename, isAbsolute, relative, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, relative, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
@@ -22,6 +22,7 @@ import type {
   ListValue,
   PrepareValue,
   ReleaseValue,
+  SessionScope,
   StatusValue,
   WorktreeItem,
   WorktreeRef,
@@ -35,6 +36,7 @@ import {
   runGit,
 } from './git.ts'
 import { isWorktreeName, worktreeName } from './naming.ts'
+import { contains } from './paths.ts'
 
 /** Attempts at a fresh name before a creation failure becomes an error. */
 const CREATE_ATTEMPTS = 3
@@ -44,6 +46,7 @@ export type {
   ListValue,
   PrepareValue,
   ReleaseValue,
+  SessionScope,
   StatusValue,
   WorktreeItem,
   WorktreeRef,
@@ -70,6 +73,13 @@ export class WorktreeToggleError extends Error {
 export interface WorktreeToggleOptions {
   /** Default for a project nothing has remembered yet. */
   readonly defaultEnabled: boolean
+  /**
+   * Report what each verb learned about the session's copy, so the model-facing
+   * scope hint can follow it without a second Git walk.
+   * @param sessionId - wire session identity.
+   * @param scope - the confirmed copy, or null when the session is not in one.
+   */
+  readonly onScope?: (sessionId: string, scope: SessionScope | null) => void
 }
 
 /** The host face the route layer exposes over the Connection fetch bridge. */
@@ -155,14 +165,53 @@ async function worktreeAt(current: string, repositoryRoot: string): Promise<Work
 }
 
 /**
- * Whether one absolute directory is the path itself or an ancestor of it.
- * @param directory - candidate ancestor.
- * @param path - absolute path to test.
- * @returns true when `path` is `directory` or lives below it.
+ * Resolve the canonical root of the repository that contains a directory.
+ * Git reports the spelling of the path it was given; the worktree service
+ * publishes canonical paths, so both halves must agree on one spelling.
+ * @param ctx - host context carrying `subprocess`.
+ * @param directory - absolute directory inside the project.
+ * @param signal - caller cancellation.
+ * @returns the canonical repository root.
  */
-function contains(directory: string, path: string): boolean {
-  const inside = relative(directory, path)
-  return inside === '' || (!inside.startsWith('..') && !isAbsolute(inside))
+async function repositoryOf(ctx: Context, directory: string, signal?: AbortSignal): Promise<string> {
+  return canonicalPath(await repositoryRoot(ctx, directory, signal))
+}
+
+/**
+ * Re-derive the copy one session runs in from its committed directory.
+ *
+ * A copy's root is the only linked checkout whose name matches the pool
+ * convention, but a session may have changed into a directory *inside* the copy,
+ * so ancestors are probed from the committed directory up to the project
+ * anchor.
+ * @param ctx - host context carrying `workingDirectory` and `subprocess`.
+ * @param agent - live session owner.
+ * @param signal - caller cancellation.
+ * @returns the copy and project root, or null when the session is not in one.
+ */
+export async function detectSessionScope(
+  ctx: Context,
+  agent: Agent,
+  signal?: AbortSignal,
+): Promise<SessionScope | null> {
+  const current = ctx.workingDirectory.get(agent.session)
+  const anchor = agent.session.header.cwd ?? current
+  if (current === anchor || !contains(anchor, current)) return null
+  let root: string
+  try {
+    root = await repositoryOf(ctx, anchor, signal)
+  } catch {
+    return null
+  }
+  signal?.throwIfAborted()
+  let probe = current
+  for (;;) {
+    const copy = await worktreeAt(probe, root)
+    if (copy !== null) return { worktree: copy, repositoryRoot: root }
+    const parent = dirname(probe)
+    if (probe === root || probe === anchor || parent === probe) return null
+    probe = parent
+  }
 }
 
 /**
@@ -204,17 +253,6 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
     return agent
   }
 
-  /**
-   * Resolve the canonical root of the repository that contains a directory.
-   * Git reports the spelling of the path it was given; the worktree service
-   * publishes canonical paths, so both halves must agree on one spelling.
-   * @param directory - absolute directory inside the project.
-   * @param signal - caller cancellation.
-   * @returns the canonical repository root.
-   */
-  const repositoryOf = async (directory: string, signal?: AbortSignal): Promise<string> =>
-    canonicalPath(await repositoryRoot(ctx, directory, signal))
-
   const status = async (
     request: { readonly sessionId: string },
     signal?: AbortSignal,
@@ -225,7 +263,7 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
     const startDirectory = agent.session.header.cwd ?? ctx.workingDirectory.get(agent.session)
     let root: string
     try {
-      root = await repositoryOf(startDirectory, signal)
+      root = await repositoryOf(ctx, startDirectory, signal)
     } catch (error) {
       if (error instanceof GitFailure) {
         return { supported: false, reason: 'not-a-git-repository', defaultEnabled: options.defaultEnabled }
@@ -235,10 +273,12 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
     const current = ctx.workingDirectory.get(agent.session)
     signal?.throwIfAborted()
     const sourceDirty = await changedFileCount(ctx, root, signal)
+    const copy = await worktreeAt(current, root)
+    options.onScope?.(request.sessionId, copy === null ? null : { worktree: copy, repositoryRoot: root })
     return {
       supported: true,
       repositoryRoot: root,
-      sessionWorktree: await worktreeAt(current, root),
+      sessionWorktree: copy,
       sourceDirty,
       defaultEnabled: options.defaultEnabled,
     }
@@ -257,6 +297,10 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
       )
     }
     if (current.sessionWorktree !== null) {
+      options.onScope?.(request.sessionId, {
+        worktree: current.sessionWorktree,
+        repositoryRoot: current.repositoryRoot,
+      })
       return {
         state: 'existing',
         worktree: current.sessionWorktree,
@@ -269,7 +313,7 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
     // create when the two name different repositories: a copy in the wrong
     // project would look like success and be worse than no copy.
     const working = ctx.workingDirectory.get(agent.session)
-    const workingProject = await repositoryOf(working, signal)
+    const workingProject = await repositoryOf(ctx, working, signal)
     if (workingProject !== current.repositoryRoot) {
       throw new WorktreeToggleError(
         'session-moved',
@@ -285,6 +329,7 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
         const created = await ctx.worktrees.create(agent, { name, from: 'HEAD' }, signal)
         const worktree: WorktreeRef = { name: created.branch, path: created.path, branch: created.branch }
         createdBySession.set(request.sessionId, worktree)
+        options.onScope?.(request.sessionId, { worktree, repositoryRoot: created.repositoryRoot })
         return {
           state: 'created',
           worktree,
@@ -331,7 +376,7 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
     const directory = absolutePath(request.path)
     let root: string
     try {
-      root = await repositoryOf(directory, signal)
+      root = await repositoryOf(ctx, directory, signal)
     } catch (error) {
       if (error instanceof GitFailure) return { supported: false, reason: 'not-a-git-repository' }
       throw error
@@ -433,7 +478,7 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
     if (!isWorktreeName(request.name)) {
       throw new WorktreeToggleError('worktree-name-invalid', `not a worktree name: ${request.name}`)
     }
-    const root = await repositoryOf(directory, signal)
+    const root = await repositoryOf(ctx, directory, signal)
     return await removeCopy(root, request.name, signal)
   }
 
@@ -459,7 +504,7 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
     const anchor = agent.session.header.cwd ?? current
     let root: string
     try {
-      root = await repositoryOf(anchor, signal)
+      root = await repositoryOf(ctx, anchor, signal)
     } catch (error) {
       if (error instanceof GitFailure) {
         throw new WorktreeToggleError(
@@ -473,7 +518,10 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
     if (!listed.supported) return { directory: current, removed: null, kept: null }
     const path = await canonicalPath(current)
     const item = listed.items.find(entry => contains(entry.path, path))
-    if (item === undefined) return { directory: current, removed: null, kept: null }
+    if (item === undefined) {
+      options.onScope?.(request.sessionId, null)
+      return { directory: current, removed: null, kept: null }
+    }
     const copy: WorktreeRef = { name: item.name, path: item.path, branch: item.branch }
     signal?.throwIfAborted()
     let directory: string
@@ -486,6 +534,7 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
         { name: copy.name, path: copy.path },
       )
     }
+    options.onScope?.(request.sessionId, null)
     const mine = createdBySession.get(request.sessionId)
     if (mine === undefined || mine.path !== copy.path) {
       // Not the switch's own copy: leave it, the panel can discard it by hand.

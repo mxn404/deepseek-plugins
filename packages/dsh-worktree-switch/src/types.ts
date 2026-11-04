@@ -45,6 +45,14 @@ export type PrepareValue = {
   readonly sourceDirty: number
 }
 
+/** A session's confirmed copy, as the host-side scope hint reads it. */
+export interface SessionScope {
+  /** The copy the session runs in. */
+  readonly worktree: WorktreeRef
+  /** Canonical root of the project the copy was made from. */
+  readonly repositoryRoot: string
+}
+
 /** The result of turning the switch off before the first prompt. */
 export type ReleaseValue = {
   /** The checkout the session now runs in. */

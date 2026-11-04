@@ -4,8 +4,9 @@
  * It mounts no service itself: the bundle patch inserts the harness worktree
  * service (`@deepseek-ai/dsh-experimental-worktree`, which provides
  * `ctx.worktrees`) and this plugin's own row. This plugin exposes five verbs
- * over the Connection fetch bridge and drives that service for creation; the
- * browser half renders the switch and the panel.
+ * over the Connection fetch bridge and drives that service for creation; it
+ * also contributes one model-facing context line while a session runs in a
+ * copy, and the browser half renders the switch and the panel.
  * @module dsh-worktree-switch
  */
 
@@ -15,8 +16,9 @@ import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-experimental-worktree'
 import type {} from '@deepseek-ai/dsh-subprocess'
 import type {} from '@deepseek-ai/dsh-working-directory'
-import { createWorktreeToggle } from './host/handlers.ts'
+import { createWorktreeToggle, detectSessionScope } from './host/handlers.ts'
 import { registerWorktreeRoutes } from './host/routes.ts'
+import { installWorktreeScope, SessionScopeRegistry } from './host/scope.ts'
 
 /** Plugin id: package name, bundle row id, browser module id. */
 export const name = 'dsh-worktree-switch'
@@ -48,6 +50,17 @@ export const Config: Schema<Config> = Schema.object({
  * @param config - validated row config.
  */
 export function apply(ctx: Context, config: Config): void {
-  const toggle = createWorktreeToggle(ctx, { defaultEnabled: config.defaultEnabled })
+  const scopes = new SessionScopeRegistry()
+  const toggle = createWorktreeToggle(ctx, {
+    defaultEnabled: config.defaultEnabled,
+    onScope: (sessionId, scope) => {
+      if (scope === null) scopes.forget(sessionId)
+      else scopes.remember(sessionId, scope)
+    },
+  })
+  installWorktreeScope(ctx, {
+    registry: scopes,
+    detect: (agent, signal) => detectSessionScope(ctx, agent, signal),
+  })
   registerWorktreeRoutes(ctx, toggle)
 }
