@@ -33,6 +33,81 @@ importers:
         specifier: ^5.0.5
         version: 5.0.5(@types/node@26.6.6)(jsdom@26.1.0)(vite@8.3.5(@types/node@26.6.6)(yaml@2.9.1))
 
+  packages/dsh-lifecycle-hooks:
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: 4.0.5
+        version: 4.0.5(@deepseek-ai/cordis-plugin-include@1.0.10)(@deepseek-ai/cordis-plugin-loader@1.0.6)
+      '@deepseek-ai/dsh-agent':
+        specifier: 0.2.1-rc.5
+        version: 0.2.1-rc.5(cbd9b78489f743dd32cfe135059e56db)
+      '@deepseek-ai/dsh-agent-loop':
+        specifier: 0.2.1-rc.5
+        version: 0.2.1-rc.5(4fd441e0ebd9a03d297878b098f59582)
+      '@deepseek-ai/dsh-agent-loop-testkit':
+        specifier: 0.2.1-rc.5
+        version: 0.2.1-rc.5(4805debbca6d56d73b4155fb31afe4e4)
+      '@deepseek-ai/dsh-bash-local':
+        specifier: 0.2.1-rc.5
+        version: 0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-shell@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-sandbox@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-llm@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5))(@deepseek-ai/dsh-session@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-scope@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5))))(@deepseek-ai/dsh-subprocess@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-http-proxy@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5))))(@deepseek-ai/dsh-subprocess@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-http-proxy@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)))(@deepseek-ai/dsh-timeout@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5))
+      '@deepseek-ai/dsh-fs-local':
+        specifier: 0.2.1-rc.5
+        version: 0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-fs@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-brand@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5))(@deepseek-ai/dsh-llm@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5))(@deepseek-ai/dsh-sandbox@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-llm@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5))(@deepseek-ai/dsh-session@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-scope@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)))))
+      '@deepseek-ai/dsh-jobs-local':
+        specifier: 0.2.1-rc.5
+        version: 0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-agent@0.2.1-rc.5(cbd9b78489f743dd32cfe135059e56db))(@deepseek-ai/dsh-jobs@0.2.1-rc.5(ea009c7b924fabbf2a06dd439d07a23c))(@deepseek-ai/dsh-scope@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5))(@deepseek-ai/dsh-timeout@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5))
+      '@deepseek-ai/dsh-llm':
+        specifier: 0.2.1-rc.5
+        version: 0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)
+      '@deepseek-ai/dsh-session':
+        specifier: 0.2.1-rc.5
+        version: 0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-scope@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5))
+      '@deepseek-ai/dsh-session-projection':
+        specifier: 0.2.1-rc.5
+        version: 0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-session@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-scope@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)))
+      '@deepseek-ai/dsh-shell-env':
+        specifier: 0.2.1-rc.5
+        version: 0.2.1-rc.5(b1f57c4915be1b00914628f246d8c625)
+      '@deepseek-ai/dsh-subprocess-local':
+        specifier: 0.2.1-rc.5
+        version: 0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-subprocess@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-http-proxy@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)))(@deepseek-ai/dsh-timeout@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5))
+      '@deepseek-ai/dsh-system-prompt':
+        specifier: 0.2.1-rc.5
+        version: 0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-llm@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5))(@deepseek-ai/dsh-scope@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5))
+      '@deepseek-ai/dsh-token-meter':
+        specifier: 0.2.1-rc.5
+        version: 0.2.1-rc.5(fcf94392d0e5350c236caccb99e94af3)
+      '@deepseek-ai/dsh-tool-bash':
+        specifier: 0.2.1-rc.5
+        version: 0.2.1-rc.5(cef5413a6c19877b3662f6d06585ebb5)
+      '@deepseek-ai/dsh-tool-fs':
+        specifier: 0.2.1-rc.5
+        version: 0.2.1-rc.5(66a8963f1c5104faf8b98016602a8b18)
+      '@deepseek-ai/dsh-tool-jobs':
+        specifier: 0.2.1-rc.5
+        version: 0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-agent@0.2.1-rc.5(cbd9b78489f743dd32cfe135059e56db))(@deepseek-ai/dsh-jobs@0.2.1-rc.5(ea009c7b924fabbf2a06dd439d07a23c))(@deepseek-ai/dsh-llm@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5))(@deepseek-ai/dsh-output-retention@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5))(@deepseek-ai/dsh-system-prompt@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-llm@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5))(@deepseek-ai/dsh-scope@0.2.1-rc.5(@deepseek-ai/cordis@4.0.5)))(@deepseek-ai/dsh-tools@0.2.1-rc.5(47e11ee6492a70a2f2353a0c993abe69))
+      '@deepseek-ai/dsh-tools':
+        specifier: 0.2.1-rc.5
+        version: 0.2.1-rc.5(47e11ee6492a70a2f2353a0c993abe69)
+      '@deepseek-ai/dsh-working-directory':
+        specifier: 0.2.1-rc.5
+        version: 0.2.1-rc.5(d6cf6ca566f417a2889ce86670cc4292)
+      '@deepseek-ai/schemastery':
+        specifier: 3.18.5
+        version: 3.18.5
+      '@types/node':
+        specifier: ^26.6.6
+        version: 26.6.6
+      tsdown:
+        specifier: ^0.23.4
+        version: 0.23.4(typescript@7.0.2)
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: ^5.0.5
+        version: 5.0.5(@types/node@26.6.6)(jsdom@26.1.0)(vite@8.3.5(@types/node@26.6.6)(yaml@2.9.1))
+
   packages/dsh-path-rules:
     dependencies:
       yaml:
