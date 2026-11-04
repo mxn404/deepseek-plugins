@@ -10,7 +10,10 @@
  * `tool.pre` (deny the call, add context for the next request, or halt),
  * `tool.post` (block, replace, or context after the tool ran), and `turn.stop`
  * (steer a stopping turn on for one more step), each through the same merge of
- * `builtin` and `command` outcomes.
+ * `builtin` and `command` outcomes. It also dispatches the observe-only
+ * `tool.result`, `session.end`, and `notification` (derived from an approval
+ * ask or an agent error): those run detached and leave an audit row, but can
+ * never decide anything.
  *
  * The wiring here is deliberately thin. Discovery lives in `discovery.ts`,
  * reading and validating one hooks file in `hooks-file.ts`, matching in
@@ -18,8 +21,9 @@
  * `payload.ts`, the single resolve→run→record→merge→apply pipeline in
  * `dispatch.ts`, the decision ranking in `outcome.ts`, the events' plans in
  * `session-start.ts` / `step-start.ts` / `tool-pre.ts` / `tool-post.ts` /
- * `turn-stop.ts`, and the audit row in `audit.ts`. `apply` only connects them
- * to the host: the watcher lifecycle, the step and continue counters, and one
+ * `tool-result.ts` / `turn-stop.ts` / `session-end.ts` / `notification.ts`, and
+ * the audit row in `audit.ts`. `apply` only connects them to the host: the
+ * watcher lifecycle, the step, turn-end, and continue counters, and one
  * listener per dispatch plan, each of which hands the shared dispatcher a plan
  * and nothing else.
  *
@@ -31,16 +35,20 @@ import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-projection'
 import type { PostToolDecision, PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
+import type {} from '@deepseek-ai/dsh-user-approval'
 import type {} from '@deepseek-ai/dsh-working-directory'
 import { Config } from './config.ts'
 import { createDetachedRuns } from './detached.ts'
 import { HookResolver } from './discovery.ts'
 import { HookDispatcher } from './dispatch.ts'
+import { approvalNotification, errorNotification, notificationPlan } from './notification.ts'
 import { sessionStartPlan } from './session-start.ts'
+import { sessionEndPlan, TurnEndTracker } from './session-end.ts'
 import { StepTracker } from './step.ts'
 import { stepStartPlan } from './step-start.ts'
 import { toolPostPlan } from './tool-post.ts'
 import { toolPrePlan } from './tool-pre.ts'
+import { toolResultPlan } from './tool-result.ts'
 import { StopContinues, turnStopPlan } from './turn-stop.ts'
 import { HookWatcher } from './watch.ts'
 
@@ -108,14 +116,31 @@ export function apply(ctx: Context, config: Config): void {
   // aborts a still-running process instead of leaking it past the plugin.
   const detached = createDetachedRuns()
   const steps = new StepTracker()
+  const turnEnds = new TurnEndTracker()
   const stopContinues = new StopContinues()
 
   // `working-directory/change` is a durable SessionEvent, not a Cordis event:
   // observe it through the session's append feed and follow the Session into
   // its new tree before the next tool call arrives. The same feed keeps the
-  // step number each payload reports.
+  // step number each payload reports, the turn/reason `session.end` reports,
+  // and is where an approval ask is turned into a notification.
   ctx.on('session/event', (session, event) => {
     steps.observe(session, event)
+    turnEnds.observe(session, event)
+    if (event.type === 'approval/asked') {
+      // `approval/asked` is log-only: no Cordis event reports an ask, so the
+      // durable append is the source of truth. The observer is detached, like
+      // every notification, and cannot affect the pending decision.
+      const ask = event.data
+      detached.track(dispatcher.dispatch(
+        observeCall(session),
+        notificationPlan(approvalNotification({
+          toolName: ask.toolName,
+          ...ask.reason === undefined ? {} : { reason: ask.reason },
+        })),
+      ))
+      return
+    }
     if (event.type !== 'working-directory/change') return
     retarget(session, event.data.cwd).catch(() => {
       // Discovery never throws for a missing file; a transient filesystem
@@ -169,6 +194,28 @@ export function apply(ctx: Context, config: Config): void {
       signal: exec.signal,
     }
   }
+
+  /**
+   * The facts an observe-only listener reports.
+   *
+   * The host has already committed what is being reported, so the run is
+   * bounded by the plugin's own disposal signal rather than by the host's
+   * (possibly aborted) call signal, and the listener never awaits it.
+   * @param session - the Session the observation belongs to.
+   * @param turn - the turn the host named, when it named one.
+   * @param step - the step the host named, when it named one.
+   * @returns the dispatch call for one observation.
+   */
+  const observeCall = (session: Session, turn?: number, step?: number) => ({
+    session,
+    cwd: ctx.workingDirectory.get(session),
+    // Agent id and Session id are the same identity (`agent.id === session.id`),
+    // which keeps the payload usable when only a Session is in hand.
+    agentId: session.header.id,
+    turn: turn ?? ctx.get('sessionProjections')?.stateOf(session, 'turnBoundary')?.lastTurn ?? 0,
+    step: step ?? steps.of(session),
+    signal: detached.signal,
+  })
 
   // `session.start`: serial and awaited, so the injected reminder is already in
   // the next-step inbox when `create()` resolves. The first pre-step claims that
@@ -229,6 +276,47 @@ export function apply(ctx: Context, config: Config): void {
     const call = callFor(exec, agent)
     if (call === undefined) return next()
     return await dispatcher.dispatch(call, toolPostPlan(exec, result, agent)) ?? next()
+  })
+
+  // `tool.result`: an emit after the registry froze the call and its final
+  // result. Nothing waits for the run — the listener hands it to the detached
+  // tracker, which the plugin's disposer drains — so an observer can never
+  // delay the tool pipeline or rewrite what the model reads.
+  ctx.on('tools/result', (exec, result) => {
+    const agent = exec.agent
+    // Programmatic calls have no Session to resolve hooks or audit against.
+    if (agent === undefined) return
+    detached.track(dispatcher.dispatch(observeCall(agent.session), toolResultPlan(exec, result)))
+  })
+
+  // `session.end`: an emit during teardown. Never await it — disposal must not
+  // wait for a hook — so the run goes to the detached tracker, which the
+  // plugin's disposer drains. The payload's turn and reason come from the
+  // committed turn/end the Session appended before disposal.
+  ctx.on('agent/disposed', ({ agent }) => {
+    const session = agent.session
+    // A Session disposed mid-turn has no closing `turn/end` to read, so the
+    // projection's next-best answer stands in; otherwise the closed turn the
+    // tracker saw is exact.
+    const closed = turnEnds.turnOf(session)
+    const turn = closed > 0
+      ? closed
+      : ctx.get('sessionProjections')?.stateOf(session, 'turnBoundary')?.lastTurn ?? 0
+    const reason = turnEnds.reasonOf(session)
+    detached.track(dispatcher.dispatch(
+      observeCall(session, turn),
+      sessionEndPlan({ turn, ...reason === undefined ? {} : { reason } }),
+    ))
+  })
+
+  // `agent/error`: the turn failed with something the loop caught. Notification
+  // is derived from the emit rather than a durable event the model could act
+  // on; the run stays detached so reporting an error can never change it.
+  ctx.on('agent/error', ({ agent, turn, step, error }) => {
+    detached.track(dispatcher.dispatch(
+      observeCall(agent.session, turn, step),
+      notificationPlan(errorNotification(error)),
+    ))
   })
 
   // `turn.stop` runs at the host's natural-stop boundary. Its return value is

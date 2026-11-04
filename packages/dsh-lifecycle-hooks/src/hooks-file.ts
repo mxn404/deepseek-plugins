@@ -17,7 +17,7 @@
 
 import { readFile, stat } from 'node:fs/promises'
 import type { DispatchedHookEvent, Hook, HookAction, HookEvent } from './hook.ts'
-import { EVENT_ACTIONS } from './hook.ts'
+import { EVENT_ACTIONS, isObserveOnly } from './hook.ts'
 import { compileToolPattern, invalidArgPattern, isRecord, type HookMatch } from './match.ts'
 
 /** Hook events the format names; this build dispatches the ones in `EVENT_ACTIONS`. */
@@ -47,17 +47,22 @@ const KNOWN_ACTIONS: ReadonlySet<string> = new Set<HookAction>([
 /**
  * Match dimensions each dispatched event offers.
  *
- * `session.start` happens before anything is selected, both tool events select
- * on the call, and `step.start` selects on the presence of a user prompt. The
- * table is the loader's half of {@link MatchSubject}: an entry naming a
- * dimension its event does not offer is dropped, never silently ignored.
+ * `session.start` happens before anything is selected, the three tool events
+ * select on the call, `step.start` selects on the presence of a user prompt,
+ * and the other observe-only events (`session.end`, `notification`) select
+ * nothing. The table is the loader's half of {@link MatchSubject}: an entry
+ * naming a dimension its event does not offer is dropped, never silently
+ * ignored.
  */
 const MATCH_DIMENSIONS: Readonly<Record<DispatchedHookEvent, 'none' | 'tool' | 'prompt'>> = {
   'session.start': 'none',
   'step.start': 'prompt',
   'tool.pre': 'tool',
   'tool.post': 'tool',
+  'tool.result': 'tool',
   'turn.stop': 'none',
+  'session.end': 'none',
+  'notification': 'none',
 }
 
 /**
@@ -69,14 +74,19 @@ const MATCH_DIMENSIONS: Readonly<Record<DispatchedHookEvent, 'none' | 'tool' | '
  * command-handler authority (filtered at dispatch time); this table is the
  * load-time gate, and it is narrower: `tool.pre` has been deny-only since the
  * walking skeleton, so widening its builtin vocabulary stays a separate
- * decision.
+ * decision. The three observe-only events accept no builtin action at all:
+ * they have no decision to apply, so an entry naming one is skipped with a
+ * warning instead of running a no-op.
  */
 const BUILTIN_ACTIONS: Readonly<Record<DispatchedHookEvent, readonly HookAction[]>> = {
   'session.start': ['context'],
   'step.start': ['deny', 'context', 'halt'],
   'tool.pre': ['deny'],
   'tool.post': ['block', 'replace', 'inject'],
+  'tool.result': [],
   'turn.stop': ['continue'],
+  'session.end': [],
+  'notification': [],
 }
 
 /**
@@ -272,7 +282,7 @@ function parseRun(raw: unknown, event: DispatchedHookEvent): RunParse {
     case 'builtin':
       return parseBuiltinRun(raw, event)
     case 'command':
-      return parseCommandRun(raw)
+      return parseCommandRun(raw, event)
     case 'module':
       return { error: 'handler type "module" is not supported by this build' }
     default:
@@ -293,7 +303,13 @@ function parseBuiltinRun(raw: Record<string, unknown>, event: DispatchedHookEven
   const action = raw.action
   if (!KNOWN_ACTIONS.has(action)) return { error: `unknown action "${action}"` }
   if (!BUILTIN_ACTIONS[event].includes(action as HookAction)) {
-    return { error: `action "${action}" is not supported by this build on ${event}` }
+    // An observe-only event has no decision to apply at all, so say that
+    // instead of implying the action might arrive in a later build.
+    return {
+      error: isObserveOnly(event)
+        ? `action "${action}" is not supported on ${event}: the event only observes, so there is no decision to apply`
+        : `action "${action}" is not supported by this build on ${event}`,
+    }
   }
   switch (action) {
     case 'context':
@@ -340,17 +356,28 @@ function parseBuiltinRun(raw: Record<string, unknown>, event: DispatchedHookEven
 
 /**
  * Parse a `command` run: the command line and its detachment flag.
+ *
+ * An observe-only event forces `async` on: the event it reports is already
+ * committed, so nothing may wait for the handler and its outcome is never
+ * merged. Writing `async: false` there cannot opt back into a decision.
  * @param raw - the entry's `run` value, known to be an object.
+ * @param event - the lifecycle point the entry is bound to.
  * @returns the executable run, or the reason the entry must be dropped.
  */
-function parseCommandRun(raw: Record<string, unknown>): RunParse {
+function parseCommandRun(raw: Record<string, unknown>, event: DispatchedHookEvent): RunParse {
   if (typeof raw.command !== 'string' || raw.command.trim().length === 0) {
     return { error: '"run.command" must be a non-empty string' }
   }
   if (raw.async !== undefined && typeof raw.async !== 'boolean') {
     return { error: '"run.async" must be a boolean' }
   }
-  return { run: { type: 'command', command: raw.command, async: raw.async === true } }
+  return {
+    run: {
+      type: 'command',
+      command: raw.command,
+      async: isObserveOnly(event) || raw.async === true,
+    },
+  }
 }
 
 /**

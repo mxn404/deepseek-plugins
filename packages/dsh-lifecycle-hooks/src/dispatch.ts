@@ -220,9 +220,39 @@ export class HookDispatcher {
     if (run.error !== undefined) {
       this.options.warn(`hook "${hook.id}" at ${plan.event} failed: ${run.error}`)
     }
+    this.reportDetachedDecision(plan, run)
     // The event never sees this decision; the record still says what the run
     // produced, which is the only trace a detached outcome leaves.
     this.record(call.session, [run], call.continuedCount)
+  }
+
+  /**
+   * Warn when a detached run produced something the event cannot apply.
+   *
+   * An observe-only event has no decision to merge, so a script that still
+   * writes an outcome is reporting a misunderstanding; the same is true of an
+   * action the event does not list. The run itself is kept: its side effect and
+   * its audit row are the observable trace, and the warning is the only way a
+   * hook author learns the outcome went nowhere.
+   * @param plan - the event's plan.
+   * @param run - the detached run that settled.
+   */
+  private reportDetachedDecision(plan: DispatchPlan<unknown>, run: HookRun): void {
+    const decision = run.decision
+    if (decision === undefined) return
+    const action = decision.action
+    if (plan.actions.length === 0) {
+      const reported = action === undefined ? 'an outcome' : `action "${action}"`
+      this.options.warn(
+        `hook "${run.hook.id}" at ${plan.event} reported ${reported}, but ${plan.event} only observes; ignored`,
+      )
+      return
+    }
+    if (action !== undefined && !plan.actions.includes(action)) {
+      this.options.warn(
+        `hook "${run.hook.id}" at ${plan.event} reported action "${action}", which ${plan.event} does not support; ignored`,
+      )
+    }
   }
 
   /**

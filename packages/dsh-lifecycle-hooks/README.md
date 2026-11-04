@@ -8,7 +8,7 @@
 `continue` 让停下的 turn 再走一步。需要更复杂的判断时，每个事件点都能跑一条 `command`：
 脚本从 stdin 读 JSON、往 stdout 写一个 JSON outcome。
 
-本插件实现 spec [#7](https://github.com/mxn404/deepseek-plugins/issues/7) 的前六刀：
+本插件实现 spec [#7](https://github.com/mxn404/deepseek-plugins/issues/7) 的前七刀：
 [#8](https://github.com/mxn404/deepseek-plugins/issues/8) 的最小工具门禁（walking skeleton）、
 [#9](https://github.com/mxn404/deepseek-plugins/issues/9) 的分层发现 / 热重载、
 [#10](https://github.com/mxn404/deepseek-plugins/issues/10) 的 command handler 与 `tool.pre`
@@ -16,11 +16,13 @@
 [#11](https://github.com/mxn404/deepseek-plugins/issues/11) 的 `tool.post` 结果改写
 （`block` / `replace` / `context`）、
 [#12](https://github.com/mxn404/deepseek-plugins/issues/12) 的 `session.start` / `step.start`
-与 `match.prompt`，以及
-[#13](https://github.com/mxn404/deepseek-plugins/issues/13) 的 `turn.stop` 继续与 loop guard。
-后续票在同一套 dispatcher、配置 schema、发现与 e2e harness 上补齐其余事件、`module`
-handler 与 `ask` outcome；目前打通 `session.start`、`step.start`、`tool.pre`、`tool.post`、
-`turn.stop` 五个事件点。
+与 `match.prompt`、
+[#13](https://github.com/mxn404/deepseek-plugins/issues/13) 的 `turn.stop` 继续与 loop guard，
+以及 [#15](https://github.com/mxn404/deepseek-plugins/issues/15) 的子 agent 覆盖与
+`tool.result` / `session.end` / `notification` 三个只观察事件。
+后续票在同一套 dispatcher、配置 schema、发现与 e2e harness 上补齐 `module` handler 与
+`ask` outcome；目前打通 `session.start`、`step.start`、`tool.pre`、`tool.post`、`turn.stop`
+五个可决策事件点，外加 `tool.result`、`session.end`、`notification` 三个只观察事件点。
 
 ## 它做什么
 
@@ -33,8 +35,9 @@ handler 与 `ask` outcome；目前打通 `session.start`、`step.start`、`tool.
 - **匹配**：`match.tool` 认精确名、`a|b` 集合与 `/regex/`；`match.args` 是工具入参的**深子集**
   ——对象按 key 递归、数组按下标前缀、字符串叶子默认精确相等，写成 `/regex/` 则对实际字符串
   做正则测试；`step.start` 上的 `match.prompt` 取 `true`（用户提交的一步）/ `false`
-  （工具续跑的一步）。`match` 整体省略表示匹配该事件点的全部调用；`session.start` 与
-  `turn.stop` 没有任何选择维度，写了 `match` 的条目在加载时被跳过并 warn。
+  （工具续跑的一步）。`match` 整体省略表示匹配该事件点的全部调用；`session.start`、
+  `turn.stop`、`session.end` 与 `notification` 没有任何选择维度，写了 `match` 的条目在加载时
+  被跳过并 warn；`tool.result` 与两个工具决策事件一样可按 `tool` / `args` 选择。
 - **拒绝**：命中的 `run` 返回 `deny` 时，宿主拿到 `{ kind: 'deny', reason }`，工具管线因此
   不进入工具实现，模型收到的工具结果就是 `Error: <reason>`。被拒绝的调用不会产生副作用。
 - **改写结果**：`tool.post` 的 hook 在工具**已经执行完**之后运行，所以它不能撤销副作用，只能
@@ -63,6 +66,18 @@ handler 与 `ask` outcome；目前打通 `session.start`、`step.start`、`tool.
   `maxStopContinues`（默认 8）限制：超过上限后忽略 `continue`、warn，turn 正常关闭；turn 号一变
   计数自动从 0 开始；同一 stop 上多个 hook 的 `continue` 合并成**一次** steer。`turn.stop`
   不接受 `halt`（halt 只属于阻塞事件），非法 action 被忽略并 warn。
+- **只观察事件**：`tool.result`（宿主 `tools/result`，在最终结果冻结后触发）、`session.end`
+  （`agent/disposed`）与 `notification`（从持久的 `approval/asked` 与 Cordis `agent/error` 派生）
+  只报告已经发生的事，没有可决策的 outcome：`command` 在这些事件上**一律脱手执行**（写不写
+  `async: true` 都一样），`builtin` 条目在加载时被跳过并 warn。`tool.result` 的 payload 带最终
+  `tool` 与 `result`，脚本改写结果不会生效并 warn；`session.end` 的 payload 带最后一个已关闭
+  turn 的 `turn` 与 `reason`（`completed` / `aborted` / `error` 等），observer 不阻塞 disposal，
+  插件销毁时由 detached tracker 兜底中止；`notification` 的 payload 是
+  `type`（`approval` / `error`）、`message` 与 approval 才有的 `tool_name`。运行失败只 warn 并
+  写进审计记录，不影响 agent。
+- **子 agent**：插件在根 composition 上挂载，listener 不带 agent scope，所以父 agent 与子
+  agent 的 `tool.pre` / `tool.post` / `tool.result` 都走同一个实例；每个 session 按**自己的**
+  `ctx.workingDirectory.get(session)` 解析配置，子 agent 用自己的 cwd 而不是父的。
 - **上下文**：outcome 里的 `context` 是给模型看的提醒。同一事件点所有 hook 的 context 按配置
   顺序拼成**一条** user 消息，包成 `<system-reminder>`，message source 标
   `dsh-lifecycle-hooks`（`src/context.ts` 是唯一的 message 形状与 source 声明）。
@@ -195,16 +210,17 @@ handler 与 `ask` outcome；目前打通 `session.start`、`step.start`、`tool.
 | `version` | 是 | 本插件的格式版本，当前只认 `1` |
 | `hooks` | 是 | hook 数组；空数组合法（等于没有配置） |
 | `hooks[].id` | 是 | 非空字符串，审计记录用它标识条目 |
-| `hooks[].on` | 是 | 事件名；本版调度 `session.start` / `step.start` / `tool.pre` / `tool.post` / `turn.stop` |
+| `hooks[].on` | 是 | 事件名；本版调度 `session.start` / `step.start` / `tool.pre` / `tool.post` / `tool.result` / `turn.stop` / `session.end` / `notification` |
 | `hooks[].match` | 否 | 省略 = 全匹配；`tool` 与 `args` 是工具事件的两条独立约束，`prompt` 属于 `step.start` |
 | `hooks[].run` | 是 | handler；`builtin`（`{ "type": "builtin", "action": "…", "reason": "…", "text": "…" }`）或 `command`（`{ "type": "command", "command": "…", "async": false }`） |
 | `hooks[].run.command` | command 必填 | shell 命令行，cwd 是 session 当前目录 |
-| `hooks[].run.async` | 否 | `true` 时脱手执行：只做副作用、不参与决策，销毁时中止 |
+| `hooks[].run.async` | 否 | `true` 时脱手执行：只做副作用、不参与决策，销毁时中止；`tool.result` / `session.end` / `notification` 上的 command 一律强制脱手 |
 | `hooks[].timeoutMs` | 否 | 正整数，覆盖行配置的 `defaultTimeoutMs` |
 | `hooks[].onFailure` | 否 | `open`（默认，失败放行）或 `block`（失败按事件合成阻断） |
 
 不认识的字段静默忽略。`on`、`run.type`、`run.action` 的完整词汇属于 spec，但本版只调度
-上面五个事件、只执行 `builtin` 与 `command`，并且每个事件只接受自己的动作：
+上面八个事件、只执行 `builtin` 与 `command`，并且每个事件只接受自己的动作（三个只观察事件
+不接受任何 builtin 动作）：
 
 | 事件 | builtin 可用动作 | 写法 |
 |---|---|---|
@@ -216,6 +232,7 @@ handler 与 `ask` outcome；目前打通 `session.start`、`step.start`、`tool.
 | `tool.post` | `replace` | `{ "action": "replace", "text": "…" }` |
 | `tool.post` | `inject` | `{ "action": "inject", "text": "…" }` |
 | `turn.stop` | `continue` | `{ "action": "continue", "reason": "…" }`（reason 可省） |
+| `tool.result` / `session.end` / `notification` | 无 | 只观察；用 `command` handler，写了 builtin 会在加载时跳过并 warn |
 
 `tool.pre` 的 builtin 自 walking skeleton 起就是 deny-only：command handler 在该事件上仍可报
 `context` / `halt`，但 builtin 的 `replace` / `block` / `context` 要等单独的取舍。
@@ -247,8 +264,9 @@ command 的 `{ "replace": { "text": "…" } }`。每个事件的 command 运行�
 ```
 
 `action` 是这次运行**自己产出**的动作（`deny` / `block` / `replace` / `halt` / `continue`），不代表事件一定
-采纳了它（`async: true` 的运行、事件不支持的 action、以及被更高优先级 outcome 压过的
-`replace` 都不会生效）；`block` / `replace` 的运行即使没有压过别的 hook，也照样各写一条记录；
+采纳了它（`async: true` 的运行、只观察事件、事件不支持的 action、以及被更高优先级 outcome
+压过的 `replace` 都不会生效；只观察事件上出现 outcome 会 warn 一句「only observes」）；
+`block` / `replace` 的运行即使没有压过别的 hook，也照样各写一条记录；
 只带 context 的运行没有 `action`。`exit_code` 只在 command 运行拿到退出码时出现（超时被杀、被
 信号杀死时没有）；`continued_count` 只在 `turn.stop` 的每条记录上出现（本次 stop 之前该 turn
 已授予的连续 continue 次数，含被 loop guard 忽略的那次）；`error` 只在运行失败时出现，失败
@@ -269,9 +287,14 @@ pnpm --dir /home/ubuntu/code/deepseek-harness dsh --profile dev --dump-config   
 
 这些是这一刀接受的边界，不是待修的缺陷：
 
-- **只覆盖五个事件**：`tool.result`、`session.end`、`notification` 与 `module` handler、`ask`
-  还没实现；配置文件里合法地写了它们也只会被跳过并 warn。`ask` 在 `outcome.ts` 的合并顺序里
-  占了位，但目前没有事件允许它，会在合并前被剥掉。
+- **还差 `module` handler 与 `ask`**：`module` handler 与 `ask` outcome 还没实现；配置文件里
+  合法地写了它们也只会被跳过并 warn。`ask` 在 `outcome.ts` 的合并顺序里占了位，但目前没有
+  事件允许它，会在合并前被剥掉。
+- **只观察事件是 best-effort**：`session.end` 在 `agent/disposed` 上脱手运行，不阻塞 disposal；
+  进程整体退出、或插件比 agent 先销毁时，这次运行会被 detached tracker 中止，可能只留下一条
+  失败记录。`tool.result` 与 `notification` 同理，都是事件已经提交之后的旁路。
+- **`notification` 没有 match 维度**：不能只订阅 approval 或只订阅某类错误；一条条目会在每次
+  approval/asked 与 agent/error 上运行，脚本自己按 payload 的 `type` / `tool_name` 分支。
 - **`tool.post` 不能阻止副作用**：hook 在工具执行后才运行，`block` / `replace` 只改变模型读到
   的结果；工具写下的文件、发出的请求都已经发生。要在执行前拦截，用 `tool.pre` 的 `deny`。
 - **`replace` 只能换模型可见内容**：宿主的 `value` 是执行期 schema 内 JSON、从不落盘，也无法

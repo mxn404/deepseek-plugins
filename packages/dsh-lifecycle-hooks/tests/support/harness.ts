@@ -22,6 +22,7 @@ import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import * as ToolBash from '@deepseek-ai/dsh-tool-bash'
 import * as ToolFs from '@deepseek-ai/dsh-tool-fs'
 import * as ToolJobs from '@deepseek-ai/dsh-tool-jobs'
+import ApprovalService from '@deepseek-ai/dsh-user-approval'
 import { vi } from 'vitest'
 import * as DshLifecycleHooks from '../../src/index.ts'
 import { MockAdapter } from './mock-adapter.ts'
@@ -43,13 +44,33 @@ export interface HooksHarness {
   /** Register one mock model route and return its adapter. */
   registerAdapter(route: string, script: ConstructorParameters<typeof MockAdapter>[0]): MockAdapter
   /** Create a production Agent on one registered route. */
-  createAgent(route: string, cwd?: string): Promise<Agent>
+  createAgent(route: string, cwd?: string, meta?: AgentSessionMeta): Promise<Agent>
+  /**
+   * Dispose the AgentLoop fiber, which disposes every live Agent (and emits
+   * `agent/disposed`) while the hooks plugin stays mounted.
+   */
+  disposeAgents(): Promise<void>
+}
+
+/** Fresh-session lineage a test may put on an Agent's Session header. */
+export interface AgentSessionMeta {
+  /** Durable parent lineage, for a Session standing in for a delegated child. */
+  readonly parentSession?: SessionId
+  /** Product classification of a delegated child. */
+  readonly origin?: 'subagent'
+  /** Delegation depth persisted on the child's header. */
+  readonly delegationDepth?: number
 }
 
 /** Optional real-service stacks a test wants mounted next to the plugin. */
 export interface HooksHarnessOptions {
   /** Mount the real bash tool stack (jobs, subprocess, shell env, executor, tool). */
   readonly bash?: boolean
+  /**
+   * Mount the real approval service, so a `tools/pre-execute` listener (or a
+   * future `ask` outcome) produces the durable `approval/asked` event.
+   */
+  readonly approval?: boolean
   /**
    * Directory to use as the user's `$DSH_HOME`; defaults to `<root>/.dsh-home`.
    * Every harness stubs the env so a test never reads the developer's real home.
@@ -84,9 +105,10 @@ export async function createHooksHarness(
     await ctx.plugin(LocalBashExecutor, { timeoutMs: 20_000 })
     await ctx.plugin(ToolBash)
   }
+  if (options.approval === true) await ctx.plugin(ApprovalService, { policy: 'ask' })
   // The Loader/schema supplies every default, so the harness only passes overrides.
   await ctx.plugin(DshLifecycleHooks, config as DshLifecycleHooks.Config)
-  await ctx.plugin(AgentLoop, { agents: [] })
+  const agentLoopFiber = await ctx.plugin(AgentLoop, { agents: [] })
   const warnings: string[] = []
   const pluginWarnings: string[] = []
   vi.spyOn(ctx.logger, 'warn').mockImplementation((...args: unknown[]) => {
@@ -105,13 +127,20 @@ export async function createHooksHarness(
       ctx.llm.registerAdapter([route], adapter)
       return adapter
     },
-    async createAgent(route, cwd = root) {
+    async createAgent(route, cwd = root, meta = {}) {
       sessions += 1
+      // The loop's `create` types its meta as `Pick<SessionHeader, 'cwd'>`; a
+      // variable carrying the extra lineage fields is assignable and reaches
+      // the Session store's prepare(), which folds them into the header.
+      const sessionMeta = { cwd, ...meta }
       return ctx.agentLoop.create(
         SessionId(`dsh-lifecycle-hooks-${String(sessions)}`),
         { provider: route, model: 'mock' },
-        { cwd },
+        sessionMeta,
       )
+    },
+    async disposeAgents() {
+      await agentLoopFiber.dispose()
     },
   }
 }
