@@ -38,6 +38,12 @@ export interface HookRunRecord {
    * outcome never reaches the event at all.
    */
   readonly action?: HookAction
+  /**
+   * `turn.stop` only: consecutive continues already granted in this turn, the
+   * same number the payload carried. Present on every run at that event,
+   * including one whose continue the loop guard ignored.
+   */
+  readonly continued_count?: number
   /** Clock milliseconds the run took. */
   readonly duration_ms: number
   /** Exit code of a command run; absent for a builtin or a signal death. */
@@ -56,8 +62,9 @@ declare module '@deepseek-ai/dsh-session/types' {
  * Append one run's audit record to the Session log.
  * @param session - the Session the run happened for.
  * @param run - the measured run.
+ * @param continuedCount - the event's consecutive-continue count, for `turn.stop`.
  */
-export function recordHookRun(session: Session, run: HookRun): void {
+export function recordHookRun(session: Session, run: HookRun, continuedCount?: number): void {
   // A run can carry context without an action; the record must then omit
   // `action` entirely, because an explicit `undefined` is not lossless JSON
   // and the Session would reject the whole record.
@@ -68,6 +75,7 @@ export function recordHookRun(session: Session, run: HookRun): void {
     hook_id: run.hook.id,
     handler: run.handler,
     ...action === undefined ? {} : { action },
+    ...continuedCount === undefined ? {} : { continued_count: continuedCount },
     duration_ms: run.durationMs,
     ...run.exitCode === undefined ? {} : { exit_code: run.exitCode },
     ...run.error === undefined ? {} : { error: run.error },

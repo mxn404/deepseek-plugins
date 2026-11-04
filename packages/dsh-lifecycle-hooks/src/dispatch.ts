@@ -8,7 +8,7 @@
  * event only supplies a {@link DispatchPlan}: what it matches, what it puts in
  * the payload, which actions it supports, and how the decision reaches the host
  * seam. This build registers a plan for `session.start`, `step.start`,
- * `tool.pre`, and `tool.post`.
+ * `tool.pre`, `tool.post`, and `turn.stop`.
  *
  * Two rules are enforced here for every event:
  *
@@ -49,6 +49,11 @@ export interface DispatchCall {
   readonly step: number
   /** Cancels pending runs when the host abandons the event. */
   readonly signal: AbortSignal
+  /**
+   * Consecutive continues already granted in this turn, for events that carry
+   * one (`turn.stop`); every run at that event records it. Absent elsewhere.
+   */
+  readonly continuedCount?: number
 }
 
 /**
@@ -156,7 +161,7 @@ export class HookDispatcher {
       }
     }
 
-    this.record(call.session, runs)
+    this.record(call.session, runs, call.continuedCount)
     const merged = mergeDecisions(allowedDecisions(runs, plan.actions, this.options.warn))
     if (merged === undefined) return undefined
     if (call.signal.aborted) return undefined
@@ -217,7 +222,7 @@ export class HookDispatcher {
     }
     // The event never sees this decision; the record still says what the run
     // produced, which is the only trace a detached outcome leaves.
-    this.record(call.session, [run])
+    this.record(call.session, [run], call.continuedCount)
   }
 
   /**
@@ -237,12 +242,13 @@ export class HookDispatcher {
    * Append one audit record per run, if auditing is on.
    * @param session - the Session the runs belong to.
    * @param runs - the runs to record, in configuration order.
+   * @param continuedCount - the event's consecutive-continue count, when it has one.
    */
-  private record(session: Session, runs: readonly HookRun[]): void {
+  private record(session: Session, runs: readonly HookRun[], continuedCount?: number): void {
     if (!this.options.audit) return
     for (const run of runs) {
       try {
-        recordHookRun(session, run)
+        recordHookRun(session, run, continuedCount)
       } catch (error) {
         this.options.warn(`hook run for "${run.hook.id}" was not recorded: ${messageOf(error)}`)
       }

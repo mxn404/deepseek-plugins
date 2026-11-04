@@ -31,7 +31,12 @@ export type HookEvent =
  * and to {@link EVENT_ACTIONS}; the loader derives its supported set from that
  * table, so an entry for any other named event is skipped with one warning.
  */
-export type DispatchedHookEvent = 'session.start' | 'step.start' | 'tool.pre' | 'tool.post'
+export type DispatchedHookEvent =
+  | 'session.start'
+  | 'step.start'
+  | 'tool.pre'
+  | 'tool.post'
+  | 'turn.stop'
 
 /**
  * Actions each dispatched event applies. This is the single authority the
@@ -46,12 +51,16 @@ export type DispatchedHookEvent = 'session.start' | 'step.start' | 'tool.pre' | 
  *   the turn.
  * - `tool.post` blocks the result, replaces the model-visible content, adds
  *   context for the next request, or halts the turn.
+ * - `turn.stop` continues the stopping turn for one more step; it has no
+ *   blocking action at all, because halt belongs to the events that can stop
+ *   work before it happens.
  */
 export const EVENT_ACTIONS: Readonly<Record<DispatchedHookEvent, readonly HookAction[]>> = {
   'session.start': ['context'],
   'step.start': ['deny', 'context', 'halt'],
   'tool.pre': ['deny', 'context', 'halt'],
   'tool.post': ['block', 'replace', 'context', 'halt'],
+  'turn.stop': ['continue'],
 }
 
 /** Handler kinds the `.dsh/hooks.json` vocabulary names. */
@@ -59,8 +68,9 @@ export type HookHandlerKind = 'builtin' | 'command' | 'module'
 
 /**
  * Actions the `.dsh/hooks.json` vocabulary names. This build executes `deny`,
- * `block`, `replace`, `context`, and `halt`; `continue` arrives with a later
- * ticket, and `inject` is the builtin spelling of one context line.
+ * `block`, `replace`, `context`, `halt`, and `continue`; `inject` is the
+ * builtin spelling of one context line, and `ask` is the one the vocabulary
+ * reserves without an event that applies it yet.
  */
 export type HookAction =
   | 'deny'
@@ -75,7 +85,7 @@ export type HookAction =
 /** Actions a `builtin` handler can decide without running anything. */
 export type BuiltinAction = Extract<
   HookAction,
-  'deny' | 'block' | 'replace' | 'inject' | 'context' | 'halt'
+  'deny' | 'block' | 'replace' | 'inject' | 'context' | 'halt' | 'continue'
 >
 
 /**
@@ -104,6 +114,15 @@ export type BuiltinRun =
       readonly action: Extract<BuiltinAction, 'replace' | 'inject' | 'context'>
       /** Reminder line (`context`, `inject`) or replacement text (`replace`). */
       readonly text: string
+    }
+  | {
+      readonly type: 'builtin'
+      readonly action: 'continue'
+      /**
+       * Model-facing reason, folded into the one steer message the model reads;
+       * absent when the plan should supply its own fallback line.
+       */
+      readonly reason?: string
     }
 
 /**

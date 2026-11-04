@@ -9,6 +9,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
+import { Config } from '../src/config.ts'
 import type { HookDecision } from '../src/hook.ts'
 import type { HookRun } from '../src/handler.ts'
 import { parseHooks } from '../src/hooks-file.ts'
@@ -195,6 +196,52 @@ describe('the hooks file schema', () => {
     expect(parsed.hooks[0]?.run).toEqual({ type: 'command', command: 'echo noted', async: true })
   })
 
+  it('accepts a builtin continue on turn.stop', () => {
+    const parsed = hooksOf(JSON.stringify({
+      version: 1,
+      hooks: [{
+        id: 'keep-going',
+        on: 'turn.stop',
+        run: { type: 'builtin', action: 'continue', reason: 'the tests are still red' },
+      }],
+    }))
+    expect(parsed.warnings).toEqual([])
+    expect(parsed.hooks).toEqual([{
+      id: 'keep-going',
+      on: 'turn.stop',
+      match: undefined,
+      run: { type: 'builtin', action: 'continue', reason: 'the tests are still red' },
+      timeoutMs: DEFAULTS,
+      onFailure: 'open',
+    }])
+  })
+
+  it('accepts a turn.stop continue that carries no reason', () => {
+    const parsed = hooksOf(JSON.stringify({
+      version: 1,
+      hooks: [{ id: 'quiet', on: 'turn.stop', run: { type: 'builtin', action: 'continue' } }],
+    }))
+    expect(parsed.warnings).toEqual([])
+    expect(parsed.hooks[0]?.run).toEqual({ type: 'builtin', action: 'continue' })
+  })
+
+  it('skips a turn.stop entry that carries a match clause', () => {
+    const parsed = hooksOf(JSON.stringify({
+      version: 1,
+      hooks: [{
+        id: 'matched',
+        on: 'turn.stop',
+        match: { tool: 'bash' },
+        run: { type: 'builtin', action: 'continue' },
+      }],
+    }))
+    expect(parsed.hooks).toEqual([])
+    expect(parsed.warnings).toHaveLength(1)
+    expect(parsed.warnings[0]).toContain('matched')
+    expect(parsed.warnings[0]).toContain('turn.stop')
+    expect(parsed.warnings[0]).toContain('match')
+  })
+
   it.each([
     ['a non-object entry', 7, 'not an object'],
     ['an empty id', { id: '', on: 'tool.pre', run: { type: 'builtin', action: 'deny' } }, '"id"'],
@@ -249,7 +296,22 @@ describe('the hooks file schema', () => {
     [
       'an action a later ticket owns',
       { id: 'a', on: 'tool.pre', run: { type: 'builtin', action: 'ask' } },
-      'not supported by this build',
+      'not supported by this build on tool.pre',
+    ],
+    [
+      'a builtin continue on tool.pre',
+      { id: 'a', on: 'tool.pre', run: { type: 'builtin', action: 'continue' } },
+      'not supported by this build on tool.pre',
+    ],
+    [
+      'a builtin deny on turn.stop',
+      { id: 'a', on: 'turn.stop', run: { type: 'builtin', action: 'deny' } },
+      'not supported by this build on turn.stop',
+    ],
+    [
+      'a builtin halt on turn.stop',
+      { id: 'a', on: 'turn.stop', run: { type: 'builtin', action: 'halt' } },
+      'not supported by this build on turn.stop',
     ],
     [
       'an unknown action',
@@ -284,6 +346,13 @@ describe('the hooks file schema', () => {
     }))
     expect(parsed.hooks.map(hook => hook.id)).toEqual(['first', 'last'])
     expect(parsed.warnings).toHaveLength(1)
+  })
+})
+
+describe('the row configuration', () => {
+  it('caps consecutive stop continues at 8 by default', () => {
+    // Schemastery normalizes a partial row to the Config the plugin receives.
+    expect(Config({} as Config).maxStopContinues).toBe(8)
   })
 })
 
@@ -468,6 +537,35 @@ describe('merging one event’s decisions', () => {
     const blocked = run('broken', { action: 'deny', reason: 'hook "broken" failed: boom' }, 'boom')
     expect(mergeDecisions([blocked]))
       .toEqual({ action: 'deny', reason: 'hook "broken" failed: boom', context: [] })
+  })
+
+  it('returns continue alone when no hook blocked the event', () => {
+    expect(mergeDecisions([run('keep', { action: 'continue', reason: 'fix the tests' })]))
+      .toEqual({ action: 'continue', reason: 'fix the tests', context: [] })
+  })
+
+  it('still continues when the continue hook gave no reason', () => {
+    expect(mergeDecisions([run('quiet', { action: 'continue' })]))
+      .toEqual({ action: 'continue', context: [] })
+  })
+
+  it('joins every continue reason in configuration order', () => {
+    expect(mergeDecisions([
+      run('one', { action: 'continue', reason: 'first reason' }),
+      run('two', { action: 'continue', reason: '  ', context: ['second context'] }),
+      run('three', { action: 'continue', reason: 'third reason' }),
+    ])).toEqual({
+      action: 'continue',
+      reason: 'first reason\nthird reason',
+      context: ['second context'],
+    })
+  })
+
+  it('lets a blocking action outrank a continue', () => {
+    expect(mergeDecisions([
+      run('keep', { action: 'continue', reason: 'go on' }),
+      run('deny', { action: 'deny', reason: 'no' }),
+    ])).toEqual({ action: 'deny', reason: 'no', context: [] })
   })
 })
 

@@ -62,8 +62,10 @@ export interface HookRun {
  * `context` and `inject` carry their reminder line, but only `context` keeps
  * the action (the merge still has to see it, and the audit row names it),
  * while `inject` is the spec's builtin spelling of plain extra context;
- * `replace` carries the text the event puts in front of the model. Every one
- * is filtered by the event's own plan like any other outcome.
+ * `replace` carries the text the event puts in front of the model; `continue`
+ * is the one action whose reason is optional, and an explicit `undefined` is
+ * not lossless JSON for the audit row, so it is omitted. Every one is filtered
+ * by the event's own plan like any other outcome.
  * @param run - the validated builtin run.
  * @returns its contribution to the event's merge.
  */
@@ -79,6 +81,8 @@ function builtinDecision(run: BuiltinRun): HookDecision {
       return { context: [run.text] }
     case 'replace':
       return { action: 'replace', replace: { text: run.text } }
+    case 'continue':
+      return { action: 'continue', ...run.reason === undefined ? {} : { reason: run.reason } }
   }
 }
 

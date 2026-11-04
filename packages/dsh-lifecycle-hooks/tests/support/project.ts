@@ -93,7 +93,7 @@ export function nodeScript(body: string): string {
  * A `command` hook entry.
  * @param id - hook id.
  * @param command - shell command line, run in the Session's cwd.
- * @param options - optional match clause, timeout, failure policy, detachment.
+ * @param options - optional lifecycle event, match clause, timeout, failure policy, detachment.
  * @returns the JSON entry to write.
  */
 export function commandHook(
@@ -172,6 +172,11 @@ export function hook(overrides: Record<string, unknown> & { id: string }): Recor
 /** A `builtin` deny run. */
 export function deny(reason: string): Record<string, unknown> {
   return { type: 'builtin', action: 'deny', reason }
+}
+
+/** A `builtin` continue run for a `turn.stop` hook; the reason is optional. */
+export function keepGoing(reason?: string): Record<string, unknown> {
+  return { type: 'builtin', action: 'continue', ...reason === undefined ? {} : { reason } }
 }
 
 /** Drive one complete turn and wait for the agent to go idle. */

@@ -57,6 +57,7 @@ const MATCH_DIMENSIONS: Readonly<Record<DispatchedHookEvent, 'none' | 'tool' | '
   'step.start': 'prompt',
   'tool.pre': 'tool',
   'tool.post': 'tool',
+  'turn.stop': 'none',
 }
 
 /**
@@ -75,6 +76,7 @@ const BUILTIN_ACTIONS: Readonly<Record<DispatchedHookEvent, readonly HookAction[
   'step.start': ['deny', 'context', 'halt'],
   'tool.pre': ['deny'],
   'tool.post': ['block', 'replace', 'inject'],
+  'turn.stop': ['continue'],
 }
 
 /**
@@ -314,6 +316,20 @@ function parseBuiltinRun(raw: Record<string, unknown>, event: DispatchedHookEven
           ? 'blocked by a lifecycle hook'
           : 'halted by a lifecycle hook'
       return { run: { type: 'builtin', action, reason: reason ?? fallback } }
+    }
+    case 'continue': {
+      // The only builtin action whose reason is optional: the plan reads a
+      // missing one as "continue without a line of my own".
+      const reason = typeof raw.reason === 'string' && raw.reason.trim().length > 0
+        ? raw.reason
+        : undefined
+      return {
+        run: {
+          type: 'builtin',
+          action: 'continue',
+          ...reason === undefined ? {} : { reason },
+        },
+      }
     }
     default:
       // Unreachable while `BUILTIN_ACTIONS` names only actions this build can

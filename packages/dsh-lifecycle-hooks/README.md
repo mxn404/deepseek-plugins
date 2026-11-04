@@ -3,18 +3,24 @@
 声明式生命周期钩子。把规则写成仓库里的 `.dsh/hooks.json`，随代码提交；插件按 session 的
 当前工作目录读它，在工具执行前按名称与参数匹配：命中的 `deny` 让这次工具调用**不执行**，
 拒绝理由作为工具结果回到模型。工具执行后同一个文件还能改写结果：`replace` 换掉模型读到的
-内容（脱敏 / 裁剪），`block` 把结果变成错误反馈，`context` 给模型补一句提醒。需要更复杂的
-判断时，两个位置都能跑一条 `command`：脚本从 stdin 读 JSON、往 stdout 写一个 JSON outcome。
+内容（脱敏 / 裁剪），`block` 把结果变成错误反馈，`context` 给模型补一句提醒。会话开始、
+每一步开始、以及 turn 自然停下时也能挂规则：注入上下文、按用户 prompt 拒绝一步、或用
+`continue` 让停下的 turn 再走一步。需要更复杂的判断时，每个事件点都能跑一条 `command`：
+脚本从 stdin 读 JSON、往 stdout 写一个 JSON outcome。
 
-本插件实现 spec [#7](https://github.com/mxn404/deepseek-plugins/issues/7) 的前四刀：
+本插件实现 spec [#7](https://github.com/mxn404/deepseek-plugins/issues/7) 的前六刀：
 [#8](https://github.com/mxn404/deepseek-plugins/issues/8) 的最小工具门禁（walking skeleton）、
 [#9](https://github.com/mxn404/deepseek-plugins/issues/9) 的分层发现 / 热重载、
 [#10](https://github.com/mxn404/deepseek-plugins/issues/10) 的 command handler 与 `tool.pre`
-决策协议（`deny` / `context` / `halt`），以及
+决策协议（`deny` / `context` / `halt`）、
 [#11](https://github.com/mxn404/deepseek-plugins/issues/11) 的 `tool.post` 结果改写
-（`block` / `replace` / `context`）。后续票在同一套 dispatcher、配置 schema、发现与 e2e
-harness 上补齐其余事件、`module` handler 与 `ask` / `continue` 等 outcome；目前只把
-`tool.pre` 与 `tool.post` 两个事件点打通。
+（`block` / `replace` / `context`）、
+[#12](https://github.com/mxn404/deepseek-plugins/issues/12) 的 `session.start` / `step.start`
+与 `match.prompt`，以及
+[#13](https://github.com/mxn404/deepseek-plugins/issues/13) 的 `turn.stop` 继续与 loop guard。
+后续票在同一套 dispatcher、配置 schema、发现与 e2e harness 上补齐其余事件、`module`
+handler 与 `ask` outcome；目前打通 `session.start`、`step.start`、`tool.pre`、`tool.post`、
+`turn.stop` 五个事件点。
 
 ## 它做什么
 
@@ -26,7 +32,9 @@ harness 上补齐其余事件、`module` handler 与 `ask` / `continue` 等 outc
   任何一层文件都不存在就什么都不做：不注入消息、不打日志、不写记录。
 - **匹配**：`match.tool` 认精确名、`a|b` 集合与 `/regex/`；`match.args` 是工具入参的**深子集**
   ——对象按 key 递归、数组按下标前缀、字符串叶子默认精确相等，写成 `/regex/` 则对实际字符串
-  做正则测试。`match` 整体省略表示匹配该事件点的全部调用。
+  做正则测试；`step.start` 上的 `match.prompt` 取 `true`（用户提交的一步）/ `false`
+  （工具续跑的一步）。`match` 整体省略表示匹配该事件点的全部调用；`session.start` 与
+  `turn.stop` 没有任何选择维度，写了 `match` 的条目在加载时被跳过并 warn。
 - **拒绝**：命中的 `run` 返回 `deny` 时，宿主拿到 `{ kind: 'deny', reason }`，工具管线因此
   不进入工具实现，模型收到的工具结果就是 `Error: <reason>`。被拒绝的调用不会产生副作用。
 - **改写结果**：`tool.post` 的 hook 在工具**已经执行完**之后运行，所以它不能撤销副作用，只能
@@ -44,14 +52,27 @@ harness 上补齐其余事件、`module` handler 与 `ask` / `continue` 等 outc
   坏 JSON、`replace.value`、超时都按运行失败处理（默认放行，见 `onFailure`），超时由 shell
   执行器杀掉整个进程组。`async: true` 的条目脱手执行，只做副作用、不参与决策，插件销毁时会被
   中止。
+- **会话与步骤**：`session.start` 在宿主 `agent/created` 里被 await，context 通过
+  `agent.inject` 停进 next-step inbox，第一个 `agent/pre-step` 会把它 claim 进首批消息——所以
+  注入出现在**首个**模型请求里，不是 best-effort。`step.start` 在 `agent/pre-step` 上按
+  `source.kind === 'user'` 的消息提取 prompt（工具续跑的步没有 user 消息，prompt 为 `null`）：
+  `deny` 直接 reject 这一步、prompt 不进模型，`context` 折进 `enter.messages`，`halt` 用宿主
+  的 `{ kind: 'hook' }` 取消这一轮。
+- **停止与继续**：`turn.stop` 在 `agent/turn-stopping` 上运行，`continue` 通过 `agent.steer`
+  把一条消息放进 next-step inbox，让本轮再走一步。每个 turn 连续 continue 的次数受
+  `maxStopContinues`（默认 8）限制：超过上限后忽略 `continue`、warn，turn 正常关闭；turn 号一变
+  计数自动从 0 开始；同一 stop 上多个 hook 的 `continue` 合并成**一次** steer。`turn.stop`
+  不接受 `halt`（halt 只属于阻塞事件），非法 action 被忽略并 warn。
 - **上下文**：outcome 里的 `context` 是给模型看的提醒。同一事件点所有 hook 的 context 按配置
   顺序拼成**一条** user 消息，包成 `<system-reminder>`，message source 标
-  `dsh-lifecycle-hooks`。`tool.pre` 通过 `agent.inject` 送达，`tool.post` 走宿主的
-  `additionalContexts`，两者都在**下一步**的请求里出现；`tool.post` 的 context 与 `block`
-  同时出现时也会保留（宿主的 block 只丢工具自己 defer 的 context，hook 通过
-  `additionalContexts` 给的那份会留下）。
+  `dsh-lifecycle-hooks`（`src/context.ts` 是唯一的 message 形状与 source 声明）。
+  `session.start` / `tool.pre` 通过 `agent.inject` 送达，`step.start` 折进这一步的
+  `enter.messages`，`turn.stop` 走 `agent.steer`，`tool.post` 走宿主的 `additionalContexts`，
+  都在**下一步**的请求里出现；`tool.post` 的 context 与 `block` 同时出现时也会保留（宿主的
+  block 只丢工具自己 defer 的 context，hook 通过 `additionalContexts` 给的那份会留下）。
 - **合并**：同一事件点的多条 hook 按合并顺序、文件内数组顺序执行。优先级固定为
-  `halt` > `deny` / `block` > `replace` > `context`：第一条 `deny` 或 `block` 的理由生效；
+  `halt` > `deny` / `block` > `ask` > `continue` > `replace` > `context`：第一条 `deny` 或
+  `block` 的理由生效；多个 `continue` 的理由按顺序拼进**一条** steer 消息；
   `replace` **最后一个生效**，后面的 hook 可以精修前面的替换；context 全部保留并按顺序拼接；
   只有 `halt` 会立即停止后续 handler 并以 `agent.cancel({ kind: 'hook', reason })` 中断这一轮
   （`tool.post` 的 halt 同时把该结果变成错误，模型不会读到 hook 愿意中断这一轮的那段输出）。
@@ -82,6 +103,7 @@ harness 上补齐其余事件、`module` handler 与 `ask` / `continue` 等 outc
 | `userHooks` | `true` | 是否发现 `${DSH_HOME:-~/.dsh}/hooks.json` |
 | `projectHooks` | `true` | 是否发现祖先链上的 `.dsh/hooks.json` |
 | `localHooks` | `true` | 是否发现祖先链上的 `.dsh/hooks.local.json` |
+| `maxStopContinues` | `8` | 单个 turn 允许的连续 `turn.stop` continue 次数；超过后忽略并 warn |
 
 ```yaml
 # ~/.dsh/profiles/<name>/cordis.patch.yml
@@ -91,6 +113,7 @@ harness 上补齐其余事件、`module` handler 与 `ask` / `continue` 等 outc
     audit: false
     defaultTimeoutMs: 60000
     localHooks: false
+    maxStopContinues: 4
 ```
 
 ## 配置来源与优先级
@@ -146,6 +169,22 @@ harness 上补齐其余事件、`module` handler 与 `ask` / `continue` 等 outc
       "on": "tool.post",
       "match": { "tool": "read", "args": { "file_path": "/\.png$/" } },
       "run": { "type": "builtin", "action": "block", "reason": "read the image with the image tool" }
+    },
+    {
+      "id": "project-notes",
+      "on": "session.start",
+      "run": { "type": "builtin", "action": "context", "text": "先读 CONTRIBUTING.md" }
+    },
+    {
+      "id": "gate-prompt",
+      "on": "step.start",
+      "match": { "prompt": true },
+      "run": { "type": "command", "command": "node .dsh/hooks/gate-prompt.mjs" }
+    },
+    {
+      "id": "retry-red-tests",
+      "on": "turn.stop",
+      "run": { "type": "command", "command": "node .dsh/hooks/run-tests.mjs" }
     }
   ]
 }
@@ -156,8 +195,8 @@ harness 上补齐其余事件、`module` handler 与 `ask` / `continue` 等 outc
 | `version` | 是 | 本插件的格式版本，当前只认 `1` |
 | `hooks` | 是 | hook 数组；空数组合法（等于没有配置） |
 | `hooks[].id` | 是 | 非空字符串，审计记录用它标识条目 |
-| `hooks[].on` | 是 | 事件名；本版只调度 `tool.pre` 与 `tool.post` |
-| `hooks[].match` | 否 | 省略 = 全匹配；`tool` 与 `args` 是两条独立的约束 |
+| `hooks[].on` | 是 | 事件名；本版调度 `session.start` / `step.start` / `tool.pre` / `tool.post` / `turn.stop` |
+| `hooks[].match` | 否 | 省略 = 全匹配；`tool` 与 `args` 是工具事件的两条独立约束，`prompt` 属于 `step.start` |
 | `hooks[].run` | 是 | handler；`builtin`（`{ "type": "builtin", "action": "…", "reason": "…", "text": "…" }`）或 `command`（`{ "type": "command", "command": "…", "async": false }`） |
 | `hooks[].run.command` | command 必填 | shell 命令行，cwd 是 session 当前目录 |
 | `hooks[].run.async` | 否 | `true` 时脱手执行：只做副作用、不参与决策，销毁时中止 |
@@ -165,14 +204,21 @@ harness 上补齐其余事件、`module` handler 与 `ask` / `continue` 等 outc
 | `hooks[].onFailure` | 否 | `open`（默认，失败放行）或 `block`（失败按事件合成阻断） |
 
 不认识的字段静默忽略。`on`、`run.type`、`run.action` 的完整词汇属于 spec，但本版只调度
-`tool.pre` 与 `tool.post`，只执行 `builtin` 与 `command`，并且每个事件只接受自己的动作：
+上面五个事件、只执行 `builtin` 与 `command`，并且每个事件只接受自己的动作：
 
 | 事件 | builtin 可用动作 | 写法 |
 |---|---|---|
+| `session.start` | `context` | `{ "action": "context", "text": "…" }` |
+| `step.start` | `deny` / `halt` | `{ "action": "deny", "reason": "…" }` |
+| `step.start` | `context` | `{ "action": "context", "text": "…" }` |
 | `tool.pre` | `deny` | `{ "action": "deny", "reason": "…" }` |
 | `tool.post` | `block` | `{ "action": "block", "reason": "…" }` |
 | `tool.post` | `replace` | `{ "action": "replace", "text": "…" }` |
 | `tool.post` | `inject` | `{ "action": "inject", "text": "…" }` |
+| `turn.stop` | `continue` | `{ "action": "continue", "reason": "…" }`（reason 可省） |
+
+`tool.pre` 的 builtin 自 walking skeleton 起就是 deny-only：command handler 在该事件上仍可报
+`context` / `halt`，但 builtin 的 `replace` / `block` / `context` 要等单独的取舍。
 
 `inject` 是 spec 的 builtin 词汇里「补一句 context」的动作，本插件把它折算成 `context` 的一条
 文本；`replace` 是 spec 没有单列 builtin 动作、本插件为 `tool.post` 补上的映射，等价于
@@ -200,13 +246,14 @@ command 的 `{ "replace": { "text": "…" } }`。每个事件的 command 运行�
 }
 ```
 
-`action` 是这次运行**自己产出**的动作（`deny` / `block` / `replace` / `halt`），不代表事件一定
+`action` 是这次运行**自己产出**的动作（`deny` / `block` / `replace` / `halt` / `continue`），不代表事件一定
 采纳了它（`async: true` 的运行、事件不支持的 action、以及被更高优先级 outcome 压过的
 `replace` 都不会生效）；`block` / `replace` 的运行即使没有压过别的 hook，也照样各写一条记录；
 只带 context 的运行没有 `action`。`exit_code` 只在 command 运行拿到退出码时出现（超时被杀、被
-信号杀死时没有）；`error` 只在运行失败时出现，失败默认不贡献决定，`onFailure: "block"` 时
-同一条记录会同时带 `error` 与合成的 `action`。本插件没有 UI，日志与这条记录是唯一的事后
-可观测面。
+信号杀死时没有）；`continued_count` 只在 `turn.stop` 的每条记录上出现（本次 stop 之前该 turn
+已授予的连续 continue 次数，含被 loop guard 忽略的那次）；`error` 只在运行失败时出现，失败
+默认不贡献决定，`onFailure: "block"` 时同一条记录会同时带 `error` 与合成的 `action`。本插件
+没有 UI，日志与这条记录是唯一的事后可观测面。
 
 ## 安装与验证
 
@@ -222,8 +269,9 @@ pnpm --dir /home/ubuntu/code/deepseek-harness dsh --profile dev --dump-config   
 
 这些是这一刀接受的边界，不是待修的缺陷：
 
-- **只覆盖 `tool.pre` 与 `tool.post`**：`session.start`、`step.start`、`turn.stop` 等其余事件与
-  `module` handler、`ask` / `continue` 还没实现；配置文件里合法地写了它们也只会被跳过并 warn。
+- **只覆盖五个事件**：`tool.result`、`session.end`、`notification` 与 `module` handler、`ask`
+  还没实现；配置文件里合法地写了它们也只会被跳过并 warn。`ask` 在 `outcome.ts` 的合并顺序里
+  占了位，但目前没有事件允许它，会在合并前被剥掉。
 - **`tool.post` 不能阻止副作用**：hook 在工具执行后才运行，`block` / `replace` 只改变模型读到
   的结果；工具写下的文件、发出的请求都已经发生。要在执行前拦截，用 `tool.pre` 的 `deny`。
 - **`replace` 只能换模型可见内容**：宿主的 `value` 是执行期 schema 内 JSON、从不落盘，也无法

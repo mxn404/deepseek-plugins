@@ -109,10 +109,13 @@ export function allowedDecisions(
  * `tool.pre` denies the call and `step.start` denies the step: a broken safety
  * hook must not let either through. `tool.post` blocks the result: a broken
  * sanitizer must not let the model read output it was supposed to rewrite.
- * The events a later ticket adds map their own blocking outcome here, beside
- * the merge ranking, so failure policy stays one decision per event.
  * `session.start` has no blocking outcome — it can only add context, so a
- * failure there stays fail-open.
+ * failure there stays fail-open. `turn.stop` deliberately synthesizes nothing
+ * either: its only legal action is `continue`, and a hook that failed has no
+ * evidence that more work is needed, so it fails open instead of forcing
+ * another step. The events a later ticket adds map their own blocking outcome
+ * here, beside the merge ranking, so failure policy stays one decision per
+ * event.
  * @param event - the event the failed run belongs to.
  * @param hookId - the entry's id, named in the reason so the model can act on it.
  * @param error - the failure detail.

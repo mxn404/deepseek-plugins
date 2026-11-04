@@ -7,18 +7,21 @@
  * and dispatches their hooks at dsh lifecycle extension points. This slice
  * dispatches `session.start` (context before the first request),
  * `step.start` (deny a submitted prompt, add context to the step, or halt),
- * `tool.pre` (deny the call, add context for the next request, or halt), and
- * `tool.post` (block, replace, or context after the tool ran), each through
- * the same merge of `builtin` and `command` outcomes.
+ * `tool.pre` (deny the call, add context for the next request, or halt),
+ * `tool.post` (block, replace, or context after the tool ran), and `turn.stop`
+ * (steer a stopping turn on for one more step), each through the same merge of
+ * `builtin` and `command` outcomes.
  *
  * The wiring here is deliberately thin. Discovery lives in `discovery.ts`,
  * reading and validating one hooks file in `hooks-file.ts`, matching in
  * `match.ts`, execution in `handler.ts` / `command.ts`, the per-event payload in
  * `payload.ts`, the single resolve→run→record→merge→apply pipeline in
- * `dispatch.ts`, the decision ranking in `outcome.ts`, and the audit row in
- * `audit.ts`. `apply` only connects them to the host: the watcher lifecycle,
- * the step tracker, and one listener per dispatch plan, each of which hands
- * the shared dispatcher a plan and nothing else.
+ * `dispatch.ts`, the decision ranking in `outcome.ts`, the events' plans in
+ * `session-start.ts` / `step-start.ts` / `tool-pre.ts` / `tool-post.ts` /
+ * `turn-stop.ts`, and the audit row in `audit.ts`. `apply` only connects them
+ * to the host: the watcher lifecycle, the step and continue counters, and one
+ * listener per dispatch plan, each of which hands the shared dispatcher a plan
+ * and nothing else.
  *
  * @module dsh-lifecycle-hooks
  */
@@ -38,6 +41,7 @@ import { StepTracker } from './step.ts'
 import { stepStartPlan } from './step-start.ts'
 import { toolPostPlan } from './tool-post.ts'
 import { toolPrePlan } from './tool-pre.ts'
+import { StopContinues, turnStopPlan } from './turn-stop.ts'
 import { HookWatcher } from './watch.ts'
 
 /** Plugin id: package name and bundle row id. */
@@ -104,6 +108,7 @@ export function apply(ctx: Context, config: Config): void {
   // aborts a still-running process instead of leaking it past the plugin.
   const detached = createDetachedRuns()
   const steps = new StepTracker()
+  const stopContinues = new StopContinues()
 
   // `working-directory/change` is a durable SessionEvent, not a Cordis event:
   // observe it through the session's append feed and follow the Session into
@@ -224,5 +229,33 @@ export function apply(ctx: Context, config: Config): void {
     const call = callFor(exec, agent)
     if (call === undefined) return next()
     return await dispatcher.dispatch(call, toolPostPlan(exec, result, agent)) ?? next()
+  })
+
+  // `turn.stop` runs at the host's natural-stop boundary. Its return value is
+  // ignored: a continue keeps the turn alive only because the plan steers the
+  // agent before this serial dispatch settles. The payload's turn doubles as
+  // the loop guard's reset key.
+  ctx.on('agent/turn-stopping', async ({ agent, turn, signal }) => {
+    if (signal.aborted) return
+    const session = agent.session
+    const continuedCount = stopContinues.of(agent, turn)
+    await dispatcher.dispatch(
+      {
+        session,
+        cwd: ctx.workingDirectory.get(session),
+        agentId: agent.id,
+        turn,
+        step: steps.of(session),
+        signal,
+        continuedCount,
+      },
+      turnStopPlan(agent, {
+        turn,
+        continuedCount,
+        continues: stopContinues,
+        maxStopContinues: config.maxStopContinues,
+        warn,
+      }),
+    )
   })
 }

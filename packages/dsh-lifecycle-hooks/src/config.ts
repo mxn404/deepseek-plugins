@@ -31,6 +31,12 @@ export interface Config {
    */
   localHooks: boolean
   /**
+   * Maximum number of consecutive `continue` decisions a single turn may grant
+   * at `turn.stop`. The guard exists because a stop hook that always continues
+   * would otherwise keep the turn alive forever.
+   */
+  maxStopContinues: number
+  /**
    * Whether `.dsh/hooks.json` layers are discovered. Turning this off leaves
    * the user-level file and the `hooks.local.json` layers in play.
    */
@@ -61,6 +67,11 @@ export const Config: Schema<Config> = Schema.object({
   localHooks: Schema.boolean()
     .default(true)
     .description('Discover .dsh/hooks.local.json layers.'),
+  maxStopContinues: Schema.number()
+    .step(1)
+    .min(1)
+    .default(8)
+    .description('Maximum consecutive turn.stop continues a single turn may grant.'),
   projectHooks: Schema.boolean()
     .default(true)
     .description('Discover .dsh/hooks.json layers.'),

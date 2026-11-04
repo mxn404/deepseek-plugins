@@ -1,7 +1,7 @@
 {
   "name": "dsh-lifecycle-hooks",
   "version": "0.1.0",
-  "description": "Declarative lifecycle hooks for dsh: commit a .dsh/hooks.json to a repository and let its builtin deny rule gate tool calls before they run.",
+  "description": "Declarative lifecycle hooks for dsh: commit a .dsh/hooks.json to a repository and gate tool calls, rewrite tool results, inject session and step context, and steer a stopping turn.",
   "keywords": [
     "dsh",
     "dsh-plugin",
