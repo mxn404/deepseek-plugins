@@ -19,6 +19,10 @@
   的过程中（或失败之后），开关通过 `ctx.conversation.blocks` 把该会话的输入框置为"暂停
   发送"；重试成功、关掉开关（确认不要隔离）或副本就绪时才解除。关掉开关是明确的退出
   方式——它表示"这条会话就在原目录里跑"，而不是假装隔离成功。
+- **会话范围说明**：会话在副本里时，宿主半跟着每轮请求给模型补一条上下文（紧跟工作目录那
+  行）：当前目录是 `<项目>` 的 linked worktree 副本，git 与文件操作在副本里做，主检出是源。
+  它会随恢复会话、每次进/出副本重新推导，回到项目目录后自动消失。这是**提示**，不是权限
+  边界——真正的写隔离仍取决于沙箱根（见「已知边界」）。
 - **面板**（侧边栏条目 + 自己的页面）：按项目列出该仓库的所有 linked worktree（包括
   手工 `git worktree add` 出来的），含名字、分支、路径、创建时间和未提交改动数；丢弃
   需要第二次确认，且**有未提交改动时拒绝丢弃**并说明原因。丢弃会删掉检出目录和分支。
@@ -113,9 +117,11 @@ worktree，所以新旧目录的副本都会出现，可以照常丢弃。
 
 ## 实现
 
-宿主半（`src/index.ts`）只做两件事：拿 `cordis.patch.yml` 挂上的 `ctx.worktrees` 和
+宿主半（`src/index.ts`）做三件事：拿 `cordis.patch.yml` 挂上的 `ctx.worktrees` 和
 `ctx.sessionController`，把五个动词注册成 `/api/dsh-worktree-switch/<verb>` 上的精确
-Fetch 路由（`src/host/routes.ts`），说 `client-request` / `server-response` 信封：
+Fetch 路由（`src/host/routes.ts`），说 `client-request` / `server-response` 信封；另注册一条
+`systemPrompt.context`（`worktree-switch:scope`），内容来自 `SessionScopeRegistry`，由五个
+动词、`agent/created` 和每次组装时的目录校验共同维护。
 
 | 动词 | 入参 | 行为 |
 |---|---|---|

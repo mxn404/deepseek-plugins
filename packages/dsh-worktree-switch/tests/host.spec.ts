@@ -8,11 +8,13 @@
 
 import { mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { WorktreeToggleError, createWorktreeToggle } from '../src/host/handlers.ts'
+import { assembleContextFor } from '@deepseek-ai/dsh-agent'
+import { WorktreeToggleError, createWorktreeToggle, detectSessionScope } from '../src/host/handlers.ts'
 import type { WorktreeToggle } from '../src/host/handlers.ts'
+import { installWorktreeScope, SessionScopeRegistry } from '../src/host/scope.ts'
 import { POOL_DIRECTORY, git, harness, repository, temporaryDirectory, testAgent } from './harness.ts'
 
 let ctx: Context | undefined
@@ -43,6 +45,38 @@ async function fixture(root: string, startDirectory = root, defaultEnabled = tru
   const agent = testAgent(ctx, startDirectory)
   const toggle = createWorktreeToggle(ctx, { defaultEnabled })
   return { ctx, agent, toggle }
+}
+
+/**
+ * Mount the harness with the plugin's model-facing scope context wired the way
+ * `apply()` wires it: one registry, the Git-backed detector, and the verbs
+ * reporting what they learned.
+ * @param root - repository root the filesystem provider starts in.
+ * @param startDirectory - session creation directory; defaults to the root.
+ * @param defaultEnabled - row config reported in status; defaults to true.
+ * @returns the live fixture plus the registry the prompt context reads.
+ */
+async function scopeFixture(
+  root: string,
+  startDirectory = root,
+  defaultEnabled = true,
+): Promise<Fixture & { readonly scopes: SessionScopeRegistry }> {
+  const host = await harness(root)
+  ctx = host
+  const agent = testAgent(host, startDirectory)
+  const scopes = new SessionScopeRegistry()
+  installWorktreeScope(host, {
+    registry: scopes,
+    detect: (subject, signal) => detectSessionScope(host, subject, signal),
+  })
+  const toggle = createWorktreeToggle(host, {
+    defaultEnabled,
+    onScope: (sessionId, scope) => {
+      if (scope === null) scopes.forget(sessionId)
+      else scopes.remember(sessionId, scope)
+    },
+  })
+  return { ctx: host, agent, toggle, scopes }
 }
 
 /**
@@ -265,6 +299,106 @@ describe('worktree toggle release', () => {
 
     expect(released).toEqual({ directory: root, removed: null, kept: null })
     expect(ctx.workingDirectory.get(agent.session)).toBe(root)
+  })
+})
+
+describe('worktree session scope context', () => {
+  it('narrows the model to the copy once the switch prepared it, and drops the line on release', async () => {
+    const root = await repo()
+    const { ctx, agent, toggle, scopes } = await scopeFixture(root)
+    const prepared = await toggle.prepare({ sessionId: agent.id })
+
+    expect(scopes.get(agent.id)).toMatchObject({ worktree: { path: prepared.worktree.path } })
+    const assembly = await ctx.systemPrompt.assemble(assembleContextFor(agent))
+    const hint = assembly.contexts.find(entry => entry.name === 'worktree-switch:scope')
+    expect(hint?.text).toContain(prepared.worktree.path)
+    expect(hint?.text).toContain(JSON.stringify(root))
+
+    await toggle.release({ sessionId: agent.id })
+
+    expect(scopes.get(agent.id)).toBeNull()
+    const after = await ctx.systemPrompt.assemble(assembleContextFor(agent))
+    expect(after.contexts.find(entry => entry.name === 'worktree-switch:scope')?.text ?? '').toBe('')
+  })
+
+  it('stays silent for a session that never entered a copy', async () => {
+    const root = await repo()
+    const { ctx, agent, toggle, scopes } = await scopeFixture(root, root, false)
+
+    const status = await toggle.status({ sessionId: agent.id })
+
+    expect(status).toMatchObject({ supported: true, sessionWorktree: null })
+    expect(scopes.get(agent.id)).toBeNull()
+    const assembly = await ctx.systemPrompt.assemble(assembleContextFor(agent))
+    expect(assembly.contexts.find(entry => entry.name === 'worktree-switch:scope')?.text ?? '').toBe('')
+  })
+
+  it('detects a copy the switch did not create, from inside it too', async () => {
+    const root = await repo()
+    const { ctx, agent } = await scopeFixture(root)
+    const created = await ctx.worktrees.create(agent, { name: 'brisk-fern-1a2b', from: 'HEAD' })
+
+    expect(await detectSessionScope(ctx, agent)).toMatchObject({
+      worktree: { name: 'brisk-fern-1a2b', path: created.path },
+      repositoryRoot: root,
+    })
+
+    const nested = join(created.path, 'packages', 'nested')
+    await mkdir(nested, { recursive: true })
+    await ctx.workingDirectory.set(agent, nested)
+    expect((await detectSessionScope(ctx, agent))?.worktree.path).toBe(created.path)
+
+    await ctx.workingDirectory.set(agent, root)
+    expect(await detectSessionScope(ctx, agent)).toBeNull()
+  })
+
+  it('learns a copy the switch never saw when the next request needs it', async () => {
+    const root = await repo()
+    const { ctx, agent, scopes } = await scopeFixture(root)
+    const created = await ctx.worktrees.create(agent, { name: 'quiet-harbor-3fa9', from: 'HEAD' })
+
+    // The copy was entered without a switch verb: the first assembly has no
+    // line yet, derives one in the background, and the next one carries it.
+    const first = await ctx.systemPrompt.assemble(assembleContextFor(agent))
+    expect(first.contexts.find(entry => entry.name === 'worktree-switch:scope')?.text ?? '').toBe('')
+    await vi.waitFor(() => { expect(scopes.get(agent.id)?.worktree.path).toBe(created.path) })
+    const second = await ctx.systemPrompt.assemble(assembleContextFor(agent))
+    expect(second.contexts.find(entry => entry.name === 'worktree-switch:scope')?.text).toContain(created.path)
+  })
+
+  it('drops the line synchronously as soon as the session leaves the copy', async () => {
+    const root = await repo()
+    const { ctx, agent, toggle, scopes } = await scopeFixture(root)
+    await toggle.prepare({ sessionId: agent.id })
+    await ctx.workingDirectory.set(agent, root)
+
+    const assembly = await ctx.systemPrompt.assemble(assembleContextFor(agent))
+
+    expect(assembly.contexts.find(entry => entry.name === 'worktree-switch:scope')?.text ?? '').toBe('')
+    expect(scopes.get(agent.id)).toBeNull()
+  })
+
+  it('does not re-inspect the same non-copy directory on every request', async () => {
+    const root = await repo()
+    const host = await harness(root)
+    ctx = host
+    const agent = testAgent(host, root)
+    const scopes = new SessionScopeRegistry()
+    let detections = 0
+    installWorktreeScope(host, {
+      registry: scopes,
+      detect: async () => { detections += 1; return null },
+    })
+    const nested = join(root, 'packages', 'nested')
+    await mkdir(nested, { recursive: true })
+    await host.workingDirectory.set(agent, nested)
+
+    await host.systemPrompt.assemble(assembleContextFor(agent))
+    await host.systemPrompt.assemble(assembleContextFor(agent))
+    await host.systemPrompt.assemble(assembleContextFor(agent))
+
+    await vi.waitFor(() => { expect(detections).toBe(1) })
+    expect(scopes.get(agent.id)).toBeNull()
   })
 })
 
