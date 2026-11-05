@@ -1,6 +1,6 @@
 {
   "name": "dsh-lifecycle-hooks",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Declarative lifecycle hooks for dsh: commit a .dsh/hooks.json to a repository and gate tool calls, rewrite tool results, inject session and step context, and steer a stopping turn.",
   "keywords": [
     "dsh",
