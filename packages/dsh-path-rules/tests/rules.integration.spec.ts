@@ -9,7 +9,7 @@
 
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
-import { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
+import { defineContentToolFixture } from '@deepseek-ai/dsh-tool-testkit'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   countOccurrences,

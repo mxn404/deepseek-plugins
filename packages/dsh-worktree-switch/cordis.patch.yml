@@ -5,6 +5,14 @@
 # bundle uses: a profile that already mounts the model-facing worktree tool
 # overrides this row instead of registering the `worktrees` service twice
 # (Cordis throws on a duplicate service name).
+#
+# dsh 0.2.2's @deepseek-ai/dsh-experimental-forge-bundle inserts that same
+# `worktree` id too. Loader keeps one row per id and the last layer wins, so
+# this row's `config` (including `directory`) survives only while this bundle's
+# layer is applied after the bundle that owns the other `worktree` row — which
+# is the normal case, because a profile lists host bundles before installed
+# plugins. If you reorder bundles, restate `directory` in the profile's own
+# patch layer, or the pool silently falls back to the service default.
 - insert:
     - id: worktree
       name: '@deepseek-ai/dsh-experimental-worktree'

@@ -120,3 +120,8 @@ pnpm --dir /home/ubuntu/code/deepseek-harness dsh --profile dev --dump-config   
   会话事件，压缩失败（事件带 `error`）不重放。
 - **失败可见性只在日志与索引**：没有 UI，坏规则不会弹窗；索引里的 `unavailable` 与一条
   `warn` 是全部线索。
+- **`apply_patch` 不算触碰**：dsh 0.2.2 在 `edit` 旁边多了一个 `apply_patch` 工具（单个
+  patch 字符串，没有 `file_path`），本插件只认 `read` / `write` / `edit` 的 `file_path`，
+  所以走 `apply_patch` 的改动不会触发路径规则。当前 rc.1 的出厂 preset 把该工具关着
+  （`applyPatch: false`），所以这还只是潜在缺口；哪天你在 profile 里打开它，用到它的
+  仓库请继续用常驻规则或 `read` / `edit` 触发。

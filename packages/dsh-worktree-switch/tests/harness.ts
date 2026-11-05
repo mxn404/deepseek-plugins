@@ -15,8 +15,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { Context } from '@deepseek-ai/cordis'
-import AgentRegistry from '@deepseek-ai/dsh-agent'
-import type { Agent } from '@deepseek-ai/dsh-agent'
+import AgentRegistry, { AgentModel, modelSelectionProjectionDefinition } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentOptions, ModelSelectionProjectionState } from '@deepseek-ai/dsh-agent'
 import { unsupportedInbox } from '@deepseek-ai/dsh-agent-loop-testkit'
 import WorktreeService from '@deepseek-ai/dsh-experimental-worktree'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
@@ -25,11 +25,18 @@ import type { ConfinedArgv, SandboxPolicy } from '@deepseek-ai/dsh-sandbox'
 import SandboxPolicyService from '@deepseek-ai/dsh-sandbox-policy'
 import { Session, SessionId, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
+import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import WorkingDirectoryService from '@deepseek-ai/dsh-working-directory'
 
 const execute = promisify(execFile)
+
+/**
+ * Model-selection projection mounted with each host context, keyed by that
+ * context so {@link testAgent} can read selections the way production does.
+ */
+const modelSelectionHandles = new WeakMap<Context, ProjectionHandle<ModelSelectionProjectionState>>()
 
 /** Pool directory the harness mounts the worktree service with; the plugin follows it. */
 export const POOL_DIRECTORY = '.dsh/worktrees'
@@ -88,10 +95,18 @@ export function testAgent(ctx: Context, cwd: string, name = 'worktree-switch-tes
     isSeeded: false,
     cwd,
   })
+  const options: AgentOptions = { provider: 'fixture', model: 'fixture-model' }
+  // The projection's empty-log state, used when the context mounts no registry.
+  const emptySelection: ModelSelectionProjectionState = { lastUsed: null, pending: null }
   const agent: Agent = {
     id,
     session,
-    options: {},
+    options,
+    model: new AgentModel(
+      modelSelectionHandles.get(ctx)?.readerFor(session) ?? (() => emptySelection),
+      session,
+      options,
+    ),
     status: 'idle',
     ctx: scope.ctx,
     inbox: unsupportedInbox(),
@@ -157,6 +172,7 @@ export async function harness(root: string): Promise<Context> {
   try {
     await ctx.plugin(AgentRegistry)
     await ctx.plugin(SessionProjectionRegistry)
+    modelSelectionHandles.set(ctx, await ctx.sessionProjections.register(modelSelectionProjectionDefinition))
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(LocalFileSystem, { cwd: root })
     await ctx.plugin(LocalSubprocessRuntime)

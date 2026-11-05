@@ -21,6 +21,13 @@
  * `<cwd>/.dsh/hooks-audit.jsonl` with one warning per file. A successful
  * record never touches the file, and `audit: false` skips both.
  *
+ * One case reaches the fallback by design rather than by defect: a detached
+ * `session.end` run settles after the host has already removed the Session from
+ * its SessionStore, and a store-owned Session that left the store rejects
+ * plugin records (dsh 0.2.2). The run still ends up in the fallback file, so a
+ * `session.end` audit row lives beside the project instead of in the Session
+ * log; the one warning per file names the path.
+ *
  * @module dsh-lifecycle-hooks/audit
  */
 
@@ -104,10 +111,11 @@ export interface AuditOptions {
  * Append one run's audit record to the Session log.
  *
  * The experimental plugin-record API is the primary path. If it cannot take
- * the write — the deployment has no record reader, or the host rejects the
- * record — the same payload is appended to `<cwd>/.dsh/hooks-audit.jsonl`
- * instead, with one warning per file, so a run is never silently lost. A
- * successful record never touches the file.
+ * the write — the deployment has no record reader, the host rejects the
+ * record, or the Session already left the SessionStore when a detached
+ * `session.end` run settles — the same payload is appended to
+ * `<cwd>/.dsh/hooks-audit.jsonl` instead, with one warning per file, so a run is
+ * never silently lost. A successful record never touches the file.
  * @param session - the Session the run happened for.
  * @param run - the measured run.
  * @param options - fallback location, warning sink, and the continue count.

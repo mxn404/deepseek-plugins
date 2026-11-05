@@ -91,6 +91,14 @@ worktree 服务自己的 `directory` 选项——本插件不另存一份设置�
 - 目录对每个项目都生效（是相对路径，不是在某个绝对位置开池）。若想按项目不同，只能
   在项目里放不同的 profile——目前没做这种粒度。
 
+**行 id 撞车**：dsh 0.2.2 的 Forge bundle（`@deepseek-ai/dsh-experimental-forge-bundle`）
+也插入一行 `id: worktree`。Loader 按行 id 只留一条、后层覆盖，所以本包的
+`directory: '.dsh/worktrees'` 只在**本包的层排在那份 bundle 之后**时才生效——默认情况正是
+如此（profile 先列宿主 bundle，再列装进来的插件）。如果你手动调整了 bundle 顺序，请在
+profile 的 patch 层里按上面的写法重新声明 `directory`，否则池会静默退回 harness 的默认
+目录（`.agents/worktrees`）。这条只影响目录位置，开关、面板与丢弃逻辑都按服务实际用的
+池子工作。
+
 改完重启 profile 生效。已经在旧目录里的副本不会消失：面板列的是仓库的所有 linked
 worktree，所以新旧目录的副本都会出现，可以照常丢弃。
 
