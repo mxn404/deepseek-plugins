@@ -34,7 +34,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
-import type {} from '@deepseek-ai/dsh-session-projection'
 import type { PostToolDecision, PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-user-approval'
 import type {} from '@deepseek-ai/dsh-working-directory'
@@ -134,6 +133,14 @@ export function apply(ctx: Context, config: Config): void {
   const turnEnds = new TurnEndTracker()
   const stopContinues = new StopContinues()
 
+  // The turn number lives in the Agent registry's own `turnBoundary`
+  // projection, and the registry is the supported reader for it. Reading the
+  // same projection through the generic `sessionProjections` registry is
+  // deprecated (and untyped) as of dsh 0.2.2. A deployment without the service
+  // reports 0, which is what a Session that never opened a turn reports too.
+  const lastTurnOf = (session: Session): number =>
+    ctx.get('agents')?.turnBoundaryOf(session).lastTurn ?? 0
+
   // `working-directory/change` is a durable SessionEvent, not a Cordis event:
   // observe it through the session's append feed and follow the Session into
   // its new tree before the next tool call arrives. The same feed keeps the
@@ -213,7 +220,7 @@ export function apply(ctx: Context, config: Config): void {
       cwd: ctx.workingDirectory.get(agent.session),
       agentId: agent.id,
       agent,
-      turn: ctx.get('sessionProjections')?.stateOf(agent.session, 'turnBoundary')?.lastTurn ?? 0,
+      turn: lastTurnOf(agent.session),
       step: steps.of(agent.session),
       signal: exec.signal,
     }
@@ -237,7 +244,7 @@ export function apply(ctx: Context, config: Config): void {
     // Every observe seam hands over a live Agent except `approval/asked`, whose
     // listener resolves it from the registry before calling this.
     agent,
-    turn: turn ?? ctx.get('sessionProjections')?.stateOf(agent.session, 'turnBoundary')?.lastTurn ?? 0,
+    turn: turn ?? lastTurnOf(agent.session),
     step: step ?? steps.of(agent.session),
     signal: detached.signal,
   })
@@ -328,7 +335,7 @@ export function apply(ctx: Context, config: Config): void {
     const closed = turnEnds.turnOf(session)
     const turn = closed > 0
       ? closed
-      : ctx.get('sessionProjections')?.stateOf(session, 'turnBoundary')?.lastTurn ?? 0
+      : lastTurnOf(session)
     const reason = turnEnds.reasonOf(session)
     detached.track(dispatcher.dispatch(
       observeCall(agent, turn),

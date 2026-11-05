@@ -32,7 +32,7 @@
   ],
   "engines": {
     "node": "^22.19.0 || >=24.0.0",
-    "dsh": ">=0.2.1-rc.2"
+    "dsh": ">=0.2.2-rc.1"
   },
   "dsh": {
     "manifestVersion": 1,
@@ -45,12 +45,12 @@
     }
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.4",
-    "@deepseek-ai/schemastery": "^3.18.2"
+    "@deepseek-ai/cordis": "^4.1.0",
+    "@deepseek-ai/schemastery": "^3.19.0"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.0.5",
-    "@deepseek-ai/schemastery": "3.18.5",
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/schemastery": "3.19.0",
     "@types/node": "^26.6.6",
     "tsdown": "^0.23.4",
     "typescript": "^7.0.2",

@@ -3,9 +3,15 @@
  *
  * The host reports disposal through the emit `agent/disposed`. Nothing may
  * wait at an emit, and a hook must never delay teardown, so the listener hands
- * the run to the detached tracker and returns: the Session's own log still
- * receives the audit row, and the plugin's disposer drains the run if teardown
- * continues into plugin disposal.
+ * the run to the detached tracker and returns; the plugin's disposer drains the
+ * run if teardown continues into plugin disposal.
+ *
+ * The audit row of a `session.end` run cannot reach the Session log: dsh 0.2.2
+ * detaches the Session from its SessionStore as the same disposal completes,
+ * and a store-owned Session that left the store rejects plugin records. The row
+ * therefore lands in the plugin's `<cwd>/.dsh/hooks-audit.jsonl` fallback
+ * (see {@link module:dsh-lifecycle-hooks/audit}), with one warning per file, so
+ * the run is still recorded — just not in the log that is already gone.
  *
  * The payload reports the Session's last closed turn and, when one was
  * observed, the reason that turn ended (`completed`, `aborted`, `error`, …).

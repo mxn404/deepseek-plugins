@@ -5,7 +5,8 @@
  * Every case mounts the real Context, agent loop, tools, and shell executor in
  * a temporary project whose `.dsh/hooks.json` runs a real command observer.
  * Assertions read only what the model received, whether the tool executed, the
- * files the hook wrote, the plugin's warnings, and the Session plugin records.
+ * files the hook wrote, the plugin's warnings, and the plugin's audit trail:
+ * a Session record while the Session is live, the file fallback afterwards.
  * The point of every case is the same: an observer runs, leaves its audit row,
  * and changes nothing the agent does.
  */
@@ -18,6 +19,8 @@ import { requestText, textResponse } from './support/harness.ts'
 import {
   bashToolCall,
   commandHook,
+  fallbackAuditPath,
+  hookRunFallbackRecords,
   hookRunRecords,
   lastSessionEvent,
   nodeScript,
@@ -130,17 +133,26 @@ writeFileSync('session-end.json', JSON.stringify(payload))
     await runTurn(agent)
     expect(hookRunRecords(agent.session)).toHaveLength(0)
 
-    // Disposal itself must not wait for the observer; the record and the
+    // Disposal itself must not wait for the observer; the audit row and the
     // side effect land afterwards, bounded by the plugin's detached tracker.
     await harness.disposeAgents()
-    await waitFor(() => hookRunRecords(agent.session).length === 1)
+    await waitFor(async () => (await hookRunFallbackRecords(root)).length === 1)
 
-    expect(hookRunRecords(agent.session)[0]).toMatchObject({
+    // dsh 0.2.2 removes the Session from the SessionStore as disposal
+    // completes, and a store-owned Session that left the store rejects plugin
+    // records. The row therefore lands in the plugin's file fallback on this
+    // host version; the plugin warns once per file that it moved there, so a
+    // run is never silently lost.
+    expect(hookRunRecords(agent.session)).toHaveLength(0)
+    expect((await hookRunFallbackRecords(root))[0]).toMatchObject({
       event: 'session.end',
       hook_id: 'on-end',
       handler: 'command',
       exit_code: 0,
     })
+    expect(harness.pluginWarnings.some(
+      warning => warning.includes(fallbackAuditPath(root)) && warning.includes('not recorded'),
+    )).toBe(true)
     const observed = JSON.parse(await readFile(join(root, 'session-end.json'), 'utf8')) as Record<string, unknown>
     expect(observed).toMatchObject({
       event: 'session.end',
@@ -304,8 +316,11 @@ writeFileSync('end-finished.txt', 'finished')
     await expect(exists(join(root, 'end-finished.txt'))).resolves.toBe(false)
 
     await writeFile(join(root, 'release-end.txt'), 'go')
-    await waitFor(() => hookRunRecords(agent.session).length === 1)
-    expect(hookRunRecords(agent.session)[0]).toMatchObject({
+    // Same post-disposal path as above: the audit row reaches the file
+    // fallback, not the Session log that left the store during disposal.
+    await waitFor(async () => (await hookRunFallbackRecords(root)).length === 1)
+    expect(hookRunRecords(agent.session)).toHaveLength(0)
+    expect((await hookRunFallbackRecords(root))[0]).toMatchObject({
       event: 'session.end',
       hook_id: 'slow-end',
       exit_code: 0,

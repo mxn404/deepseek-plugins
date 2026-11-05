@@ -219,7 +219,7 @@ overlay 里这一行的 `name` 要写成插件包的绝对路径，否则从仓�
 | `tool.post` | `tools/post-execute` | `tool`、`args` | `block`、`replace`、`context`、`halt` | 串行 await，但工具**已经执行**；`block` 把结果变成 `isError`，`replace` 只换模型可见 `content`，`context` 走 `additionalContexts`（下一步到）；`halt` 取消本轮并阻断该结果 |
 | `tool.result` | `tools/result` | `tool`、`args` | 无（只观察） | 宿主 emit，结果已冻结；强制脱手，不阻塞、不改写；outcome 被忽略并 warn |
 | `turn.stop` | `agent/turn-stopping` | 无 | `continue` | 串行 await，但宿主的返回值被忽略；plan 用 `agent.steer` 把合并后的消息放进 next-step inbox，让本轮再走一步；受 `maxStopContinues` 限制 |
-| `session.end` | `agent/disposed` | 无 | 无（只观察） | teardown 中的 emit；强制脱手、不阻塞 disposal，插件销毁时由 detached tracker 兜底中止；payload 带最后关闭的 `turn` 与可选 `reason` |
+| `session.end` | `agent/disposed` | 无 | 无（只观察） | teardown 中的 emit；强制脱手、不阻塞 disposal，插件销毁时由 detached tracker 兜底中止；payload 带最后关闭的 `turn` 与可选 `reason`；审计行落 `.dsh/hooks-audit.jsonl`（见下） |
 | `notification` | 派生：durable `approval/asked` + Cordis `agent/error` | 无 | 无（只观察） | 强制脱手；payload 的 `type` 为 `approval` / `error`，`message` 一行，approval 才有 `tool_name`；approval 需要该 session 的 agent 仍活着，否则跳过 |
 
 **阻塞与只观察的差别**：`session.start` / `step.start` / `tool.pre` / `tool.post` 能改变
@@ -326,7 +326,7 @@ export default async (ctx) => {
 | `event` | 事件名，与 payload 里的 `event` 相同 |
 | `payload` | 事件 payload，和 command 从 stdin 读到的是同一份 |
 | `agent` | 这个事件所属的活 agent（`inject` / `steer` / `cancel` …） |
-| `session` | 活 Session，审计记录也写在这里 |
+| `session` | 活 Session；审计记录通常也写在这里（`session.end` 的落文件兜底） |
 | `tool` | 有工具的事件上为 `{ name, call_id, input }`，否则 `undefined` |
 | `result` | 带结果的事件上为 `{ is_error, content }`，否则 `undefined` |
 | `signal` | 事件被放弃或本条超时后 abort；不响应它的模块会继续跑完 |
@@ -403,7 +403,8 @@ deny 本次调用，`tool.post` 的 halt 同时把该结果变成错误，模型
 
 ### 审计与审批
 
-每次 hook 运行往 session 写一条 `plugin:dsh-lifecycle-hooks/run`：
+每次 hook 运行写一条 `plugin:dsh-lifecycle-hooks/run` 审计记录：正常情况下它是 Session
+日志里的一条 plugin record；dsh 0.2.2 起 `session.end` 的运行落在文件兜底里（见下）。
 
 ```jsonc
 {
@@ -430,6 +431,10 @@ deny 本次调用，`tool.post` 的 halt 同时把该结果变成错误，模型
 - **写不进 Session 时兜底到文件**：实验性的 plugin-record API 不可用、或宿主拒收这条记录
   时，同一份 payload 会以一行一条 JSON 的形式追加到 `<session cwd>/.dsh/hooks-audit.jsonl`，
   每个文件只 warn 一次；成功的记录路径**不会**产生这个文件。
+- **`session.end` 固定走文件兜底**：dsh 0.2.2 在 disposal 完成时把 Session 移出
+  SessionStore，而离开 store 的 Session 拒收 plugin record；等这条脱手运行落定，Session
+  日志已经不可写。记录不丢——它就是上面那条 JSON 行——只是落点从 Session 日志换成了
+  `<session cwd>/.dsh/hooks-audit.jsonl`，第一次 warn 会指出文件路径。
 - `audit: false` 时完全不写——Session 记录与文件兜底都不写。本插件没有 UI，日志与这条记录
   是唯一的事后可观测面。
 
@@ -479,7 +484,7 @@ deny 本次调用，`tool.post` 的 halt 同时把该结果变成错误，模型
 | 阻塞 agent | `deny` / `ask` / `block` / `halt` | 明确不阻塞 | 取决于 CC 方言能力 |
 | 改写结果 | `replace`（只换模型可见 content） | 无 | 不支持 `updatedToolOutput` |
 | handler | builtin / command / module | fire-and-forget command | command |
-| 可观测性 | 每次运行写 plugin record + 日志 | 历史、UI、webhook / 桌面 / 飞书通知 | 日志 |
+| 可观测性 | 每次运行写 plugin record（`session.end` 落文件兜底）+ 日志 | 历史、UI、webhook / 桌面 / 飞书通知 | 日志 |
 | 事件词汇 | dsh 原生（`tool.pre`、`turn.stop`…） | 自己的通知事件 | `hook/*` CC 方言 |
 
 **装哪个：**
@@ -500,9 +505,12 @@ deny 本次调用，`tool.post` 的 halt 同时把该结果变成错误，模型
   模型读到的结果；文件已经写了、请求已经发了。要在执行前拦截用 `tool.pre`。
 - **`replace` 只能换模型可见内容**：宿主的结果 `value` 是执行期 schema 内 JSON、从不落盘，
   无法由插件重新校验。尝试替换 `value` 是协议错误，不是静默忽略。
-- **`session.end` 是 best-effort**：它在 `agent/disposed` 的 teardown 中脱手运行，不阻塞
-  disposal；进程整体退出、或插件比 agent 先销毁时，这次运行可能只留下一条失败记录。
-  `tool.result` 与 `notification` 同理，都是事件提交之后的旁路。
+- **`session.end` 的审计行不在 Session 日志里**：它在 `agent/disposed` 的 teardown 中脱手
+  运行，不阻塞 disposal；等它落定时宿主的 disposal 已经把 Session 移出 SessionStore，而
+  离开 store 的 Session 拒收 plugin record（dsh 0.2.2 的硬约束）。所以这一行固定写进
+  `<session cwd>/.dsh/hooks-audit.jsonl`，每个文件 warn 一次；进程整体退出、或插件比 agent
+  先销毁时，这次运行可能只留下一条失败记录。`tool.result` 与 `notification` 同理，都是
+  事件提交之后的旁路。
 - **只观察事件不能决定**：`tool.result` / `session.end` / `notification` 上返回 outcome
   会被忽略并 warn；要干预就绑到对应的可决策事件。
 - **module 在宿主进程内**：与插件、宿主共享同一进程与权限，能读环境变量、写任何文件；
@@ -521,7 +529,8 @@ deny 本次调用，`tool.post` 的 halt 同时把该结果变成错误，模型
   改写、且 watch 没报事件）时要到下一次真正改动才生效。
 - **发现只看 cwd 链**：只有 session 当前目录的祖先链参与解析，不读兄弟目录；monorepo 里
   `cd` 到别的包后按新链解析。
-- **没有 UI / CLI**：日志与 plugin record 是唯一可观测面；`ask` 的最终结果要对着宿主的
+- **没有 UI / CLI**：日志与审计记录（Session 里的 plugin record，或 `session.end` 的
+  `.dsh/hooks-audit.jsonl` 兜底）是唯一可观测面；`ask` 的最终结果要对着宿主的
   `approval/asked` / `approval/decided` 读。
 - **clone 即信任**：hooks 文件是仓库内容。克隆并打开一个仓库，就接受了它在
   `.dsh/hooks.json` 里写的 command / module——它们会在宿主进程或 shell 里运行，**没有**

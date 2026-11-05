@@ -9,7 +9,7 @@
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { pluginRecordOf, type SessionEvent, type SessionEventMap } from '@deepseek-ai/dsh-session'
-import { chmod, mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { toolCallResponse } from './mock-adapter.ts'
@@ -252,6 +252,33 @@ export function hookRunRecords(session: { snapshotEvents(): readonly SessionEven
     records.push(record.data as Record<string, unknown>)
   }
   return records
+}
+
+/**
+ * Absolute path of the file fallback: where a run lands when the Session can no
+ * longer take a plugin record, as after the Session left the SessionStore.
+ */
+export function fallbackAuditPath(root: string): string {
+  return join(root, '.dsh', 'hooks-audit.jsonl')
+}
+
+/**
+ * Every hook-run audit row the file fallback received, in order.
+ *
+ * Empty when every run took the Session path: a successful record never
+ * touches the file.
+ * @param root - project root the fallback lives under.
+ * @returns the parsed JSON lines, or an empty list when the file does not exist.
+ */
+export async function hookRunFallbackRecords(root: string): Promise<Record<string, unknown>[]> {
+  let text: string
+  try {
+    text = await readFile(fallbackAuditPath(root), 'utf8')
+  } catch {
+    return []
+  }
+  return text.split('\n').filter(line => line.length > 0)
+    .map(line => JSON.parse(line) as Record<string, unknown>)
 }
 
 /**
