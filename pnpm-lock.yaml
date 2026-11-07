@@ -111,6 +111,42 @@ importers:
         specifier: ^5.0.5
         version: 5.0.5(@types/node@26.6.6)(jsdom@26.1.0)(vite@8.3.5(@types/node@26.6.6)(yaml@2.9.1))
 
+  packages/dsh-new-session:
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: 4.1.0
+        version: 4.1.0(@deepseek-ai/cordis-plugin-include@1.1.0)(@deepseek-ai/cordis-plugin-loader@1.1.0)
+      '@deepseek-ai/dsh-api-remote-access':
+        specifier: 0.2.2-rc.1
+        version: 0.2.2-rc.1(@deepseek-ai/cordis@4.1.0)
+      '@deepseek-ai/dsh-api-session-controller':
+        specifier: 0.2.2-rc.1
+        version: 0.2.2-rc.1(defa772e6a1e3e72f23a5d66d0620db7)
+      '@deepseek-ai/dsh-client-locale':
+        specifier: 0.2.2-rc.1
+        version: 0.2.2-rc.1(@deepseek-ai/cordis@4.1.0)
+      '@deepseek-ai/dsh-client-ui-commands':
+        specifier: 0.2.2-rc.1
+        version: 0.2.2-rc.1(@deepseek-ai/cordis@4.1.0)
+      '@deepseek-ai/dsh-client-ui-slots':
+        specifier: 0.2.2-rc.1
+        version: 0.2.2-rc.1(@deepseek-ai/cordis@4.1.0)
+      '@deepseek-ai/dsh-client-ui-workspace':
+        specifier: 0.2.2-rc.1
+        version: 0.2.2-rc.1(@deepseek-ai/cordis@4.1.0)
+      '@types/node':
+        specifier: ^26.6.6
+        version: 26.6.6
+      tsdown:
+        specifier: ^0.23.4
+        version: 0.23.4(typescript@7.0.2)
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: ^5.0.5
+        version: 5.0.5(@types/node@26.6.6)(jsdom@26.1.0)(vite@8.3.5(@types/node@26.6.6)(yaml@2.9.1))
+
   packages/dsh-path-rules:
     dependencies:
       yaml:
@@ -548,6 +584,11 @@ packages:
     peerDependencies:
       '@deepseek-ai/cordis': ~4.1.0
 
+  '@deepseek-ai/dsh-api-remote-access@0.2.2-rc.1':
+    resolution: {integrity: sha512-UupADKJ/D6yyZKzvN6jyKrCzl8GXWgYxYoHQ00LEIYSmLUVmHXy6ABoeKkm2GIzcMLhWheEj01tvfynT0vhnNA==}
+    peerDependencies:
+      '@deepseek-ai/cordis': ~4.1.0
+
   '@deepseek-ai/dsh-api-session-controller@0.2.2-rc.1':
     resolution: {integrity: sha512-BtAWPuxMzaEKTQWR2D4vNbZf+3eJ9Zi9Y2XFx843SJF/nECakC+QVXeT3WB+YguU0i+9RqEf4Fy/R7nXNfJOyw==}
     peerDependencies:
@@ -659,6 +700,11 @@ packages:
 
   '@deepseek-ai/dsh-client-store@0.2.2-rc.1':
     resolution: {integrity: sha512-qMqkH1udz0pBjYi/S+KxEb4C70y6akJjdXxldXIy86h7fH+nAnzOC8+ooV8soz3tidCFtgS6MKcKOm1rvPmFSg==}
+    peerDependencies:
+      '@deepseek-ai/cordis': ~4.1.0
+
+  '@deepseek-ai/dsh-client-ui-commands@0.2.2-rc.1':
+    resolution: {integrity: sha512-Sic33XEXROUz6tWEhlZSGeAfV33wTsW57wzgK++1RuWGoTD2RhvS9ZRMgw/hcaaaQGaiWyCSuzLZOXfBOsSiYw==}
     peerDependencies:
       '@deepseek-ai/cordis': ~4.1.0
 
@@ -2847,6 +2893,12 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
+  '@deepseek-ai/dsh-api-remote-access@0.2.2-rc.1(@deepseek-ai/cordis@4.1.0)':
+    dependencies:
+      '@deepseek-ai/cordis': 4.1.0(@deepseek-ai/cordis-plugin-include@1.1.0)(@deepseek-ai/cordis-plugin-loader@1.1.0)
+      '@deepseek-ai/dsh-typert-protocol': 0.2.2-rc.1(@deepseek-ai/cordis@4.1.0)
+      zod: 4.4.3
+
   '@deepseek-ai/dsh-api-session-controller@0.2.2-rc.1(defa772e6a1e3e72f23a5d66d0620db7)':
     dependencies:
       '@deepseek-ai/cordis': 4.1.0(@deepseek-ai/cordis-plugin-include@1.1.0)(@deepseek-ai/cordis-plugin-loader@1.1.0)
@@ -2967,6 +3019,10 @@ snapshots:
       '@deepseek-ai/schemastery': 3.19.0
 
   '@deepseek-ai/dsh-client-store@0.2.2-rc.1(@deepseek-ai/cordis@4.1.0)':
+    dependencies:
+      '@deepseek-ai/cordis': 4.1.0(@deepseek-ai/cordis-plugin-include@1.1.0)(@deepseek-ai/cordis-plugin-loader@1.1.0)
+
+  '@deepseek-ai/dsh-client-ui-commands@0.2.2-rc.1(@deepseek-ai/cordis@4.1.0)':
     dependencies:
       '@deepseek-ai/cordis': 4.1.0(@deepseek-ai/cordis-plugin-include@1.1.0)(@deepseek-ai/cordis-plugin-loader@1.1.0)
 

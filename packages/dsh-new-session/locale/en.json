@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "New Session command",
+    "description": "Type /new in the composer to start a fresh conversation in the current workspace."
+  }
+}
