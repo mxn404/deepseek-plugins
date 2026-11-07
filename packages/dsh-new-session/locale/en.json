@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "New Session command",
-    "description": "Type /new in the composer to start a fresh conversation in the current workspace."
+    "title": "Clear conversation command",
+    "description": "Type /clear (or /new) in the composer to start a fresh conversation in the current working directory; the previous one stays in your history."
   }
 }

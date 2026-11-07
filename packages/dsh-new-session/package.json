@@ -1,7 +1,7 @@
 {
   "name": "dsh-new-session",
   "version": "0.1.0",
-  "description": "A `/new` slash command in the Web GUI composer: start a fresh Session in the current Workspace without leaving the keyboard.",
+  "description": "`/clear` (alias `/new`) in the Web GUI composer: start a fresh conversation in the current working directory and keep the previous one in your history.",
   "keywords": [
     "dsh",
     "dsh-plugin",
@@ -45,6 +45,8 @@
       "platform": "web",
       "inject": [
         "@deepseek-ai/dsh-api-remote-access",
+        "@deepseek-ai/dsh-api-workspace-controller",
+        "@deepseek-ai/dsh-client-connection",
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-ui-commands",
         "@deepseek-ai/dsh-client-ui-workspace"
@@ -53,21 +55,31 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.1.0",
+    "@deepseek-ai/dsh-agent": ">=0.2.2-rc.1 <0.2.3-0",
     "@deepseek-ai/dsh-api-remote-access": ">=0.2.2-rc.1 <0.2.3-0",
     "@deepseek-ai/dsh-api-session-controller": ">=0.2.2-rc.1 <0.2.3-0",
+    "@deepseek-ai/dsh-api-workspace-controller": ">=0.2.2-rc.1 <0.2.3-0",
+    "@deepseek-ai/dsh-client-connection": ">=0.2.2-rc.1 <0.2.3-0",
     "@deepseek-ai/dsh-client-locale": ">=0.2.2-rc.1 <0.2.3-0",
     "@deepseek-ai/dsh-client-ui-commands": ">=0.2.2-rc.1 <0.2.3-0",
     "@deepseek-ai/dsh-client-ui-slots": ">=0.2.2-rc.1 <0.2.3-0",
-    "@deepseek-ai/dsh-client-ui-workspace": ">=0.2.2-rc.1 <0.2.3-0"
+    "@deepseek-ai/dsh-client-ui-workspace": ">=0.2.2-rc.1 <0.2.3-0",
+    "@deepseek-ai/dsh-session": ">=0.2.2-rc.1 <0.2.3-0",
+    "@deepseek-ai/dsh-working-directory": ">=0.2.2-rc.1 <0.2.3-0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/dsh-agent": "0.2.2-rc.1",
     "@deepseek-ai/dsh-api-remote-access": "0.2.2-rc.1",
     "@deepseek-ai/dsh-api-session-controller": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-api-workspace-controller": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-connection": "0.2.2-rc.1",
     "@deepseek-ai/dsh-client-locale": "0.2.2-rc.1",
     "@deepseek-ai/dsh-client-ui-commands": "0.2.2-rc.1",
     "@deepseek-ai/dsh-client-ui-slots": "0.2.2-rc.1",
     "@deepseek-ai/dsh-client-ui-workspace": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-session": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-working-directory": "0.2.2-rc.1",
     "@types/node": "^26.6.6",
     "tsdown": "^0.23.4",
     "typescript": "^7.0.2",

@@ -1,25 +1,32 @@
 /**
- * Host half of the `/new` command plugin.
+ * Host half of the conversation reset.
  *
- * The command itself is a browser contribution: the slash menu and the
- * new-Session navigation both live in the Web GUI, so this Host row only mounts
- * the package — which is enough for the client-module scanner to publish
- * `lib/client.js`, and for the plugin's lifecycle to follow the bundle.
+ * The browser half owns the `/clear` (alias `/new`) command: it decides when
+ * the user wants a fresh conversation and drives Workspace navigation. This
+ * half owns the one thing only the Host can do — start the new Session in the
+ * source Session's working directory — and exposes it as one exact route on the
+ * Connection fetch bridge.
  *
  * @module dsh-new-session
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-agent'
+import type {} from '@deepseek-ai/dsh-api-session-controller'
+import type {} from '@deepseek-ai/dsh-client-connection'
+import type {} from '@deepseek-ai/dsh-working-directory'
+import { createAdoption, registerAdoptionRoute } from './host/adopt.ts'
 
 /** Plugin id: package name, bundle row id, and browser module id. */
 export const name = 'dsh-new-session'
 
+/** Services this plugin cannot work without. */
+export const inject = ['agents', 'connection', 'workingDirectory']
+
 /**
- * Mount the inert Host half.
- * @param ctx - the Cordis context.
+ * Mount the Host half.
+ * @param ctx - Host context.
  */
 export function apply(ctx: Context): void {
-  // No host-side capability on purpose: a Host handler could not move the
-  // browser's current Session, so `/new` is a client-owned action instead.
-  void ctx
+  registerAdoptionRoute(ctx, createAdoption(ctx))
 }
