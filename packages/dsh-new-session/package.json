@@ -1,6 +1,6 @@
 {
   "name": "dsh-new-session",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "`/clear` (alias `/new`) in the Web GUI composer: start a fresh conversation in the current working directory and keep the previous one in your history.",
   "keywords": [
     "dsh",
