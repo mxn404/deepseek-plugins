@@ -171,7 +171,7 @@ export function WorktreeChip(props: WorktreeChipProps): ReactElement | null {
     <div
       className="dsh-wt-chip"
       data-phase={state.phase}
-      data-intent={position ? 'on' : 'off'}
+      data-position={position ? 'on' : 'off'}
       data-kept={state.kept === null ? 'false' : state.kept.reason}
       data-hint={hint}
     >

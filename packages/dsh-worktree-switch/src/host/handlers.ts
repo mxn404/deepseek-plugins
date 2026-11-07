@@ -17,6 +17,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-api-session-controller'
 import type {} from '@deepseek-ai/dsh-experimental-worktree'
 import type {} from '@deepseek-ai/dsh-working-directory'
+import { isKeptLeftover } from '../types.ts'
 import type {
   BaseRef,
   CopyRef,
@@ -805,7 +806,7 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
     const keepCopy = (reason: KeptReason, error?: string): ReleaseValue => {
       // Only copies with content are cleanup the sidebar should count. A copy
       // kept because another session owns it is not a leftover of this host.
-      if (reason === 'dirty') keep(root, item.name)
+      if (isKeptLeftover(reason)) keep(root, item.name)
       return error === undefined
         ? { directory, removed: null, kept: copy, keptReason: reason }
         : { directory, removed: null, kept: copy, keptReason: reason, error }
