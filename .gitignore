@@ -3,8 +3,10 @@
 lib/
 *.tsbuildinfo
 
-# Dependencies and local package stores.
-node_modules/
+# Dependencies and local package stores. The pattern has no trailing slash so a
+# `node_modules` symlink (the local workaround for a read-only pnpm store) is
+# ignored too, not committed into the tree.
+node_modules
 .pnpm-store/
 
 # Local scratch caches used while scaffolding in this checkout.

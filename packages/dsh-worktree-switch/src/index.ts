@@ -74,6 +74,7 @@ export function apply(ctx: Context, config: Config): void {
       if (scope === null) scopes.forget(sessionId)
       else scopes.remember(sessionId, scope)
     },
+    readScope: sessionId => scopes.get(sessionId),
   })
   installWorktreeScope(ctx, {
     registry: scopes,

@@ -62,11 +62,15 @@ import type { IConversation } from '@deepseek-ai/dsh-client-ui-conversation/clie
 import type { ILayout, MainPanelId, PanelInfo } from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { IWorkspaces } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type { WorkspaceSnapshot, WorkspaceView } from '@deepseek-ai/dsh-api-workspace-controller/client'
+import type {
+  ISessions, SessionBinding, SessionListState, SessionSummary,
+} from '@deepseek-ai/dsh-api-session-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { ComposerBlock } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { apply, inject as pluginInject, PANEL_ID } from '../src/client/index.tsx'
 import type {
-  ListValue, PrepareValue, ReleaseValue, StatusValue, WorktreeItem, WorktreeRef,
+  CopyRef, DiscardBranchValue, KeptReason, ListValue, OrphanBranch, PrepareValue, ReleaseValue, ScopeValue,
+  StatusValue, WorktreeItem, WorktreeRef,
 } from '../src/types.ts'
 
 /** Keyed `main` panel id the plugin registers under. */
@@ -153,7 +157,7 @@ async function loadClientModule<T>(specifier: string, id: string): Promise<T> {
 }
 
 /** The wire verbs this plugin's host half answers. */
-export type HostVerb = 'status' | 'prepare' | 'release' | 'list' | 'discard'
+export type HostVerb = 'status' | 'prepare' | 'release' | 'scope' | 'list' | 'discard' | 'discardBranch'
 
 /** One recorded host round trip. */
 export interface HostCall {
@@ -205,6 +209,16 @@ export function copyRef(name = 'quiet-harbor-3fa9', repositoryRoot = REPOSITORY)
     path: `${repositoryRoot}/.dsh/worktrees/${name}`,
     branch: name,
   }
+}
+
+/**
+ * One detached copy, as the list/scope verbs report it: same directory, no branch.
+ * @param name - copy name; defaults to `brisk-fern-1a2b`.
+ * @param repositoryRoot - repository the pool lives in.
+ * @returns the copy reference with a null branch.
+ */
+export function detachedRef(name = 'brisk-fern-1a2b', repositoryRoot = REPOSITORY): CopyRef {
+  return { ...copyRef(name, repositoryRoot), branch: null }
 }
 
 /**
@@ -263,22 +277,59 @@ export function releaseValue(overrides: Partial<ReleaseValue> = {}): ReleaseValu
     directory: REPOSITORY,
     removed: copyRef(),
     kept: null,
+    keptReason: null,
     ...overrides,
   }
 }
 
 /**
+ * A `release` answer that kept the copy, with the reason the host reported.
+ * @param reason - why the host kept it.
+ * @param overrides - fields to replace; `error: null` omits the host detail.
+ * @returns the release value.
+ */
+export function keptReleaseValue(
+  reason: KeptReason = 'dirty',
+  overrides: Omit<Partial<ReleaseValue>, 'error'> & { readonly error?: string | null } = {},
+): ReleaseValue {
+  const { error, ...rest } = overrides
+  const value: ReleaseValue = {
+    directory: REPOSITORY,
+    removed: null,
+    kept: copyRef(),
+    keptReason: reason,
+    error: '1 file with uncommitted changes',
+    ...rest,
+  }
+  const mutable = value as { error?: string }
+  if (error === null) delete mutable.error
+  else if (error !== undefined) mutable.error = error
+  return value
+}
+
+/**
  * A supported `list` answer.
- * @param items - copies to list.
+ * @param options - copies, leftover branches, and kept copies to list.
  * @returns the list value.
  */
-export function listValue(items: readonly WorktreeItem[] = []): Extract<ListValue, { supported: true }> {
-  return { supported: true, repositoryRoot: REPOSITORY, items }
+export function listValue(options: {
+  readonly items?: readonly WorktreeItem[]
+  readonly orphans?: readonly OrphanBranch[]
+  readonly keptCopies?: number
+  readonly repositoryRoot?: string
+} = {}): Extract<ListValue, { supported: true }> {
+  return {
+    supported: true,
+    repositoryRoot: options.repositoryRoot ?? REPOSITORY,
+    items: options.items ?? [],
+    orphans: options.orphans ?? [],
+    keptCopies: options.keptCopies ?? 0,
+  }
 }
 
 /**
  * One pool row.
- * @param overrides - fields to replace.
+ * @param overrides - fields to replace; `branch: null` makes it a detached copy.
  * @returns the worktree item.
  */
 export function worktreeItem(overrides: Partial<WorktreeItem> = {}): WorktreeItem {
@@ -300,6 +351,67 @@ export function worktreeItem(overrides: Partial<WorktreeItem> = {}): WorktreeIte
 export function discardValue(name: string): { removed: true; name: string; branch: string; path: string } {
   const ref = copyRef(name)
   return { removed: true, name: ref.name, branch: ref.branch, path: ref.path }
+}
+
+/**
+ * A detached copy's discard answer: no branch was deleted.
+ * @param name - discarded copy name.
+ * @returns the discard value.
+ */
+export function detachedDiscardValue(
+  name: string,
+): { removed: true; name: string; branch: null; path: string } {
+  const ref = copyRef(name)
+  return { removed: true, name: ref.name, branch: null, path: ref.path }
+}
+
+/**
+ * A deleted leftover branch's answer.
+ * @param branch - branch that was deleted.
+ * @returns the discard-branch value.
+ */
+export function discardBranchValue(branch: string): DiscardBranchValue {
+  return { removed: true, branch }
+}
+
+/**
+ * A `scope` answer for a session that runs in a copy.
+ * @param overrides - fields to replace.
+ * @returns the scope value.
+ */
+export function scopeValue(
+  overrides: Partial<Extract<ScopeValue, { inWorktree: true }>> = {},
+): ScopeValue {
+  return {
+    inWorktree: true,
+    worktree: copyRef(),
+    repositoryRoot: REPOSITORY,
+    changedFiles: 0,
+    ...overrides,
+  }
+}
+
+/**
+ * A `scope` answer for a session that runs in the project directory.
+ * @returns the scope value.
+ */
+export function outOfScope(): ScopeValue {
+  return { inWorktree: false }
+}
+
+/**
+ * One leftover branch row.
+ * @param overrides - fields to replace.
+ * @returns the orphan branch.
+ */
+export function orphanBranch(overrides: Partial<OrphanBranch> = {}): OrphanBranch {
+  return {
+    branch: 'eager-island-3fb8',
+    commits: 2,
+    subject: 'Add the session header badge',
+    committedAt: 1_700_000_000_000,
+    ...overrides,
+  }
 }
 
 /** The session slice the chip reads: the blank-session hero test. */
@@ -442,6 +554,121 @@ export interface WorkspaceFixture {
   readonly title: string
 }
 
+/**
+ * Sessions-service double: the catalog rows the panel derives the current copy
+ * from, plus the per-session projections the header badge reads.
+ *
+ * The real service also owns transports, generations, and retain lifetimes;
+ * this fake keeps only the two faces this plugin consumes — `list` and
+ * `binding(id)?.session.projections`.
+ */
+export class FakeSessions {
+  /** Catalog snapshot the panel reads. */
+  readonly list: SnapshotStore<SessionListState>
+
+  /** Session ids the main conversation view retains. */
+  private readonly retained = new Set<string>()
+  /** Per-session, per-key projection sources. */
+  private readonly projections = new Map<string, SnapshotStore<unknown>>()
+
+  constructor() {
+    this.list = createSnapshotStore<SessionListState>({
+      ids: [],
+      byId: {},
+      phase: 'ready',
+      projectionsBySession: {},
+    })
+  }
+
+  /**
+   * Mark one session as the visible one and record its working directory.
+   * @param sessionId - Session identity.
+   * @param workingDirectory - the directory it runs in, or null for none.
+   */
+  setCurrent(sessionId: string, workingDirectory: string | null): void {
+    this.retained.add(sessionId)
+    this.projectionSource(sessionId, 'workingDirectory').set(workingDirectory)
+    this.publish()
+  }
+
+  /**
+   * Update one projection without changing which session is current.
+   * @param sessionId - Session identity.
+   * @param key - projection key.
+   * @param value - whole value.
+   */
+  setProjection(sessionId: string, key: string, value: unknown): void {
+    this.projectionSource(sessionId, key).set(value)
+  }
+
+  /** Forget every catalog row; the panel then derives no current copy. */
+  clear(): void {
+    this.retained.clear()
+    this.publish()
+  }
+
+  /**
+   * The key-addressed projection face the real session face exposes.
+   * @param sessionId - Session identity.
+   * @param key - projection key.
+   * @returns the observable face for that key.
+   */
+  faceOf(sessionId: string, key: string): ObservableSnapshot<unknown> {
+    return this.projectionSource(sessionId, key)
+  }
+
+  /** The sessions-service face `ctx.sessions` exposes, trimmed to what this plugin reads. */
+  client(): ISessions {
+    const face = {
+      list: this.list,
+      binding: (id: SessionId): SessionBinding | undefined => this.binding(id),
+    }
+    return face as unknown as ISessions
+  }
+
+  private binding(id: SessionId): SessionBinding | undefined {
+    if (!this.retained.has(String(id))) return undefined
+    const face = {
+      sessionId: id,
+      session: {
+        sessionId: id,
+        projections: { faceOf: (key: string) => this.faceOf(String(id), key) },
+      },
+    }
+    return face as unknown as SessionBinding
+  }
+
+  private projectionSource(sessionId: string, key: string): SnapshotStore<unknown> {
+    const composite = `${sessionId}\u0000${key}`
+    const existing = this.projections.get(composite)
+    if (existing !== undefined) return existing
+    const created = createSnapshotStore<unknown>(undefined)
+    this.projections.set(composite, created)
+    return created
+  }
+
+  private publish(): void {
+    const ids = [...this.retained]
+    const byId: Record<string, SessionSummary> = {}
+    for (const id of ids) {
+      byId[id] = {
+        id: id as SessionId,
+        displayTitle: id,
+        running: false,
+        retainedBy: { mainView: 1 },
+        blank: false,
+        updatedAt: 0,
+      }
+    }
+    this.list.set({
+      ids: ids as SessionId[],
+      byId: byId as Record<SessionId, SessionSummary>,
+      phase: 'ready',
+      projectionsBySession: {},
+    })
+  }
+}
+
 /** Panel view handle returned by {@link ClientHarness.renderSlot}. */
 export interface ClientSlotView {
   /** The rendered container (Testing Library root). */
@@ -546,6 +773,12 @@ function BoundSlot(props: BoundSlotProps): ReactNode {
   if (scope === 'session') {
     composed.useSession = selectorHook(harness.session)
     composed.sessionId = sessionId
+    // The framework standard kit's key-addressed projection reader, bound to
+    // this session's fake projection store.
+    composed.useProjection = (
+      key: string,
+      selector?: (value: unknown) => unknown,
+    ): unknown => selectorHook(harness.sessions.faceOf(String(sessionId), key))(selector)
   }
 
   const Component = entry.component as ComponentType<Record<string, unknown>>
@@ -566,6 +799,9 @@ export class ClientHarness {
 
   /** Layout double. */
   readonly layout = new FakeLayout()
+
+  /** Sessions-service double: catalog rows and per-session projections. */
+  readonly sessions = new FakeSessions()
 
   /** Session snapshot store the fake session kit reads. */
   readonly session: SnapshotStore<SessionFixtureState>
@@ -638,6 +874,7 @@ export class ClientHarness {
     ctx.provide('connection', harness.connection as unknown as ConnectionHandle)
     ctx.provide('conversation', harness.conversation())
     ctx.provide('layout', harness.layout)
+    ctx.provide('sessions', harness.sessions.client())
     ctx.provide('workspaces', { list: workspaces } as unknown as IWorkspaces)
 
     // The fake renderer: `renderSlot` below is this bench's rendering entry.
@@ -667,6 +904,15 @@ export class ClientHarness {
     this.workspacesStore.update((draft) => {
       (draft as { items: readonly WorkspaceView[] }).items = workspaces.map(workspaceView)
     })
+  }
+
+  /**
+   * Point the visible session at one directory, the way the host's
+   * `workingDirectory` projection would.
+   * @param directory - directory the session runs in, or null for none.
+   */
+  setWorkingDirectory(directory: string | null): void {
+    this.sessions.setCurrent(this.sessionId, directory)
   }
 
   /**
@@ -743,7 +989,9 @@ export class ClientHarness {
       name: 'root',
       children: {
         'conversation.input.left': { kind: 'list', scope: 'session' },
+        'conversation.session.header.utilities': { kind: 'list', scope: 'session' },
         main: { kind: 'keyed', scope: 'root' },
+        'shell.overlay': { kind: 'list', scope: 'root' },
         'sidebar.panellist': { kind: 'list', scope: 'root' },
       },
     }, () => null)

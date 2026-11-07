@@ -214,3 +214,143 @@ export async function changedFileCount(
   })
   return result.stdout.split('\n').filter(line => line.trim() !== '').length
 }
+
+/**
+ * Resolve the whereabouts of one checkout's Git administration directory.
+ *
+ * A linked worktree's `.git` is a file pointing at
+ * `<common>/worktrees/<name>`; this is the directory Git owns for that one
+ * checkout, which is where the switch records its claim on the copy.
+ * @param ctx - Host context carrying the subprocess provider.
+ * @param checkout - absolute directory of the checkout to ask.
+ * @param signal - caller cancellation.
+ * @returns the absolute admin directory Git reports.
+ * @throws {GitFailure} when the directory is not inside a Git working tree.
+ */
+export async function absoluteGitDir(ctx: Context, checkout: string, signal?: AbortSignal): Promise<string> {
+  const result = await runGit(ctx, checkout, ['rev-parse', '--absolute-git-dir'], { signal })
+  const path = result.stdout.replace(/\r?\n$/, '')
+  if (path === '') throw new GitFailure(['rev-parse', '--absolute-git-dir'], result)
+  return path
+}
+
+/**
+ * Read the branch one checkout has checked out.
+ * @param ctx - Host context carrying the subprocess provider.
+ * @param checkout - absolute directory of the checkout to ask.
+ * @param signal - caller cancellation.
+ * @returns the branch name, or null when the checkout is on a detached HEAD.
+ */
+export async function currentBranch(
+  ctx: Context,
+  checkout: string,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  const result = await runGit(ctx, checkout, ['symbolic-ref', '--short', '--quiet', 'HEAD'], {
+    signal,
+    allowedExitCodes: [0, 1],
+  })
+  const name = result.stdout.replace(/\r?\n$/, '')
+  return result.exitCode === 0 && name !== '' ? name : null
+}
+
+/**
+ * Resolve one revision to the commit id it names.
+ * @param ctx - Host context carrying the subprocess provider.
+ * @param directory - checkout the command runs in.
+ * @param revision - revision to resolve; `HEAD` or a full id are the usual values.
+ * @param signal - caller cancellation.
+ * @returns the commit id, or null when the revision does not resolve.
+ */
+export async function revParse(
+  ctx: Context,
+  directory: string,
+  revision: string,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  const result = await runGit(ctx, directory, ['rev-parse', '--verify', '--quiet', revision], {
+    signal,
+    allowedExitCodes: [0, 1, 128],
+  })
+  const id = result.stdout.replace(/\r?\n$/, '')
+  return result.exitCode === 0 && id !== '' ? id : null
+}
+
+/**
+ * Count the commits in one revision range.
+ * @param ctx - Host context carrying the subprocess provider.
+ * @param directory - checkout the command runs in.
+ * @param range - the range to count, e.g. `HEAD..refs/heads/<branch>`.
+ * @param signal - caller cancellation.
+ * @returns the number of commits in the range.
+ * @throws {GitFailure} when the range does not resolve.
+ */
+export async function revListCount(
+  ctx: Context,
+  directory: string,
+  range: string,
+  signal?: AbortSignal,
+): Promise<number> {
+  const result = await runGit(ctx, directory, ['rev-list', '--count', range], { signal })
+  const count = Number.parseInt(result.stdout.trim(), 10)
+  return Number.isFinite(count) ? count : 0
+}
+
+/** One local branch, as `git for-each-ref` reports it. */
+export interface BranchRef {
+  /** Branch name without `refs/heads/`. */
+  readonly name: string
+  /** Commit the branch points at. */
+  readonly commit: string
+  /** Committer date of that commit, in milliseconds since the epoch. */
+  readonly committedAt: number
+  /** One-line subject of that commit. */
+  readonly subject: string
+}
+
+/**
+ * Parse `git for-each-ref` output produced with the NUL-separated format below.
+ * @param stdout - the command's stdout.
+ * @returns one entry per local branch, in Git's order.
+ */
+export function parseBranchRefs(stdout: string): BranchRef[] {
+  const refs: BranchRef[] = []
+  for (const line of stdout.split('\n')) {
+    if (line === '') continue
+    const [name, commit, seconds, subject] = line.split('\u0000')
+    if (name === undefined || commit === undefined || seconds === undefined || subject === undefined) continue
+    const committedAt = Number.parseInt(seconds, 10) * 1000
+    refs.push({
+      name,
+      commit,
+      committedAt: Number.isFinite(committedAt) ? committedAt : 0,
+      subject,
+    })
+  }
+  return refs
+}
+
+/**
+ * List the local branches of one repository.
+ * @param ctx - Host context carrying the subprocess provider.
+ * @param root - repository root the command runs in.
+ * @param signal - caller cancellation.
+ * @returns every local branch with its tip commit.
+ */
+export async function listBranchRefs(
+  ctx: Context,
+  root: string,
+  signal?: AbortSignal,
+): Promise<BranchRef[]> {
+  const result = await runGit(
+    ctx,
+    root,
+    [
+      'for-each-ref',
+      '--format=%(refname:short)%00%(objectname)%00%(committerdate:unix)%00%(subject)',
+      'refs/heads',
+    ],
+    { signal },
+  )
+  return parseBranchRefs(result.stdout)
+}

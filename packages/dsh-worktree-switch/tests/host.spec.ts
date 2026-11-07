@@ -13,7 +13,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { assembleContextFor } from '@deepseek-ai/dsh-agent'
 import { WorktreeToggleError, createWorktreeToggle, detectSessionScope } from '../src/host/handlers.ts'
-import type { PrepareValue, WorktreeToggle } from '../src/host/handlers.ts'
+import type { ListValue, PrepareValue, WorktreeToggle } from '../src/host/handlers.ts'
 import { installWorktreeScope, SessionScopeRegistry } from '../src/host/scope.ts'
 import { POOL_DIRECTORY, git, harness, remoteFixture, repository, temporaryDirectory, testAgent } from './harness.ts'
 import type { RemoteFixture } from './harness.ts'
@@ -143,6 +143,22 @@ function created(prepared: PrepareValue): Extract<PrepareValue, { state: 'create
   return prepared
 }
 
+/** Build a toggle over the context the current test mounted. */
+function currentToggle(): WorktreeToggle {
+  if (ctx === undefined) throw new Error('no host context mounted')
+  return createWorktreeToggle(ctx, { defaultEnabled: true, baseRef: 'fresh' })
+}
+
+/**
+ * Narrow a list result to the supported arm.
+ * @param listed - the list value under test.
+ * @returns the supported arm.
+ */
+function supportedList(listed: ListValue): Extract<ListValue, { supported: true }> {
+  if (!listed.supported) throw new Error('expected a supported list')
+  return listed
+}
+
 /**
  * Read the checkout rows of one repository's `git worktree list`.
  * @param root - repository root to inspect.
@@ -182,7 +198,13 @@ describe('worktree toggle status', () => {
     const listed = await toggle.list({ path: root })
 
     expect(status).toMatchObject({ supported: true, defaultEnabled: false })
-    expect(listed).toEqual({ supported: true, repositoryRoot: root, items: [] })
+    expect(listed).toEqual({
+      supported: true,
+      repositoryRoot: root,
+      items: [],
+      orphans: [],
+      keptCopies: 0,
+    })
     await expect(stat(join(root, POOL_DIRECTORY))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 })
@@ -192,7 +214,7 @@ describe('worktree toggle prepare', () => {
     const root = await repo()
     const { ctx, agent, toggle } = await fixture(root)
 
-    const prepared = await toggle.prepare({ sessionId: agent.id })
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
 
     expect(prepared).toMatchObject({ state: 'created', repositoryRoot: root, sourceDirty: 0 })
     expect(prepared.worktree.name).toBe(prepared.worktree.branch)
@@ -210,7 +232,7 @@ describe('worktree toggle prepare', () => {
     const root = await repo()
     const { ctx, agent, toggle } = await fixture(root)
 
-    const first = await toggle.prepare({ sessionId: agent.id })
+    const first = created(await toggle.prepare({ sessionId: agent.id }))
     const second = await toggle.prepare({ sessionId: agent.id })
 
     expect(first.state).toBe('created')
@@ -230,7 +252,7 @@ describe('worktree toggle prepare', () => {
     const { ctx, agent, toggle } = await fixture(root, nested)
 
     const status = await toggle.status({ sessionId: agent.id })
-    const prepared = await toggle.prepare({ sessionId: agent.id })
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
 
     expect(status).toMatchObject({
       supported: true,
@@ -260,24 +282,28 @@ describe('worktree toggle release', () => {
   it('moves the session back and removes the copy the switch created', async () => {
     const root = await repo()
     const { ctx, agent, toggle } = await fixture(root)
-    const prepared = await toggle.prepare({ sessionId: agent.id })
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
 
     const released = await toggle.release({ sessionId: agent.id })
 
-    expect(released).toEqual({ directory: root, removed: prepared.worktree, kept: null })
+    expect(released).toEqual({
+      directory: root,
+      removed: prepared.worktree,
+      kept: null,
+      keptReason: null,
+    })
     expect(ctx.workingDirectory.get(agent.session)).toBe(root)
     await expect(stat(prepared.worktree.path)).rejects.toMatchObject({ code: 'ENOENT' })
     expect(await git(root, 'branch', '--list', prepared.worktree.branch)).toBe('')
     expect(await worktreePaths(root)).toEqual([root])
-    const listed = await toggle.list({ path: root })
-    if (!listed.supported) throw new Error('expected a supported list')
+    const listed = supportedList(await toggle.list({ path: root }))
     expect(listed.items).toEqual([])
   })
 
   it('moves the session back from a subdirectory of a copy and still removes it', async () => {
     const root = await repo()
     const { ctx, agent, toggle } = await fixture(root)
-    const prepared = await toggle.prepare({ sessionId: agent.id })
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
     const nested = join(prepared.worktree.path, 'packages', 'nested')
     await mkdir(nested, { recursive: true })
     await ctx.workingDirectory.set(agent, nested)
@@ -301,6 +327,7 @@ describe('worktree toggle release', () => {
     expect(released.directory).toBe(root)
     expect(released.removed).toBeNull()
     expect(released.kept).toMatchObject({ name, path: created.path })
+    expect(released.keptReason).toBe('not-owned')
     expect(ctx.workingDirectory.get(agent.session)).toBe(root)
     expect((await stat(created.path)).isDirectory()).toBe(true)
     expect(await git(root, 'branch', '--list', name)).toContain(name)
@@ -309,7 +336,7 @@ describe('worktree toggle release', () => {
   it('keeps a dirty copy on disk but still moves the session back', async () => {
     const root = await repo()
     const { ctx, agent, toggle } = await fixture(root)
-    const prepared = await toggle.prepare({ sessionId: agent.id })
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
     await writeFile(join(prepared.worktree.path, 'untracked.txt'), 'dirty\n')
 
     const released = await toggle.release({ sessionId: agent.id })
@@ -317,6 +344,8 @@ describe('worktree toggle release', () => {
     expect(released.directory).toBe(root)
     expect(released.removed).toBeNull()
     expect(released.kept).toMatchObject({ name: prepared.worktree.name, branch: prepared.worktree.branch })
+    expect(released.keptReason).toBe('dirty')
+    expect(released.error).toContain('1 uncommitted change(s)')
     expect(ctx.workingDirectory.get(agent.session)).toBe(root)
     expect((await stat(prepared.worktree.path)).isDirectory()).toBe(true)
     expect(await git(root, 'branch', '--list', prepared.worktree.branch)).toContain(prepared.worktree.name)
@@ -328,7 +357,7 @@ describe('worktree toggle release', () => {
 
     const released = await toggle.release({ sessionId: agent.id })
 
-    expect(released).toEqual({ directory: root, removed: null, kept: null })
+    expect(released).toEqual({ directory: root, removed: null, kept: null, keptReason: null })
     expect(ctx.workingDirectory.get(agent.session)).toBe(root)
   })
 })
@@ -337,7 +366,7 @@ describe('worktree session scope context', () => {
   it('narrows the model to the copy once the switch prepared it, and drops the line on release', async () => {
     const root = await repo()
     const { ctx, agent, toggle, scopes } = await scopeFixture(root)
-    const prepared = await toggle.prepare({ sessionId: agent.id })
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
 
     expect(scopes.get(agent.id)).toMatchObject({ worktree: { path: prepared.worktree.path } })
     const assembly = await ctx.systemPrompt.assemble(assembleContextFor(agent))
@@ -437,12 +466,11 @@ describe('worktree toggle list', () => {
   it('lists the pool copy and never the main checkout', async () => {
     const root = await repo()
     const { agent, toggle } = await fixture(root)
-    const prepared = await toggle.prepare({ sessionId: agent.id })
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
 
-    const listed = await toggle.list({ path: root })
+    const listed = supportedList(await toggle.list({ path: root }))
 
     expect(listed).toMatchObject({ supported: true, repositoryRoot: root })
-    if (!listed.supported) throw new Error('expected a supported list')
     expect(listed.items).toHaveLength(1)
     const item = listed.items[0]
     expect(item).toBeDefined()
@@ -462,7 +490,7 @@ describe('worktree toggle discard', () => {
   it('refuses a dirty copy and leaves its directory and branch in place', async () => {
     const root = await repo()
     const { agent, toggle } = await fixture(root)
-    const prepared = await toggle.prepare({ sessionId: agent.id })
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
     await writeFile(join(prepared.worktree.path, 'untracked.txt'), 'dirty\n')
 
     const failure = await failureOf(() =>
@@ -473,15 +501,14 @@ describe('worktree toggle discard', () => {
     expect(failure.details).toMatchObject({ name: prepared.worktree.name, changedFiles: 1 })
     expect((await stat(prepared.worktree.path)).isDirectory()).toBe(true)
     expect(await git(root, 'branch', '--list', prepared.worktree.branch)).toContain(prepared.worktree.name)
-    const listed = await toggle.list({ path: root })
-    if (!listed.supported) throw new Error('expected a supported list')
+    const listed = supportedList(await toggle.list({ path: root }))
     expect(listed.items).toMatchObject([{ name: prepared.worktree.name, changedFiles: 1 }])
   })
 
   it('removes a clean copy, deletes its branch, and empties the list', async () => {
     const root = await repo()
     const { agent, toggle } = await fixture(root)
-    const prepared = await toggle.prepare({ sessionId: agent.id })
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
 
     const removed = await toggle.discard({ path: root, name: prepared.worktree.name })
 
@@ -494,15 +521,14 @@ describe('worktree toggle discard', () => {
     await expect(stat(prepared.worktree.path)).rejects.toMatchObject({ code: 'ENOENT' })
     expect(await git(root, 'branch', '--list', prepared.worktree.branch)).toBe('')
     expect(await worktreePaths(root)).toEqual([root])
-    const listed = await toggle.list({ path: root })
-    if (!listed.supported) throw new Error('expected a supported list')
+    const listed = supportedList(await toggle.list({ path: root }))
     expect(listed.items).toEqual([])
   })
 
   it('rejects an unknown copy and an invalid name', async () => {
     const root = await repo()
     const { agent, toggle } = await fixture(root)
-    const prepared = await toggle.prepare({ sessionId: agent.id })
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
 
     const missing = await failureOf(() => toggle.discard({ path: root, name: 'unknown-copy' }))
     const invalid = await failureOf(() => toggle.discard({ path: root, name: '../x' }))
@@ -677,5 +703,322 @@ describe('worktree copy base point', () => {
     // A fetch on the second call would have moved origin/main to `further`.
     expect(await git(remote.clone, 'rev-parse', 'refs/remotes/origin/main')).toBe(remote.ahead)
     expect(further).not.toBe(remote.ahead)
+  })
+})
+
+/**
+ * Make one branch undeletable by Git, the way a concurrent fetch or another
+ * session's lock does.
+ * @param root - repository root holding the branch.
+ * @param branch - branch to lock.
+ */
+async function lockBranch(root: string, branch: string): Promise<void> {
+  await writeFile(join(root, '.git', 'refs', 'heads', `${branch}.lock`), '')
+}
+
+describe('leaving is undo, not reclaim', () => {
+  it('undoes a clean copy from a restarted host, using the claim stored in the copy', async () => {
+    const root = await repo()
+    const first = await fixture(root)
+    const prepared = created(await first.toggle.prepare({ sessionId: first.agent.id }))
+    // A restart: the plugin instance and the host context are both gone, so
+    // nothing about the copy survives in memory. The claim lives in the copy.
+    await first.ctx.fiber.dispose()
+    ctx = await harness(root)
+    const agent = testAgent(ctx, root)
+    await ctx.workingDirectory.set(agent, prepared.worktree.path)
+    const toggle = createWorktreeToggle(ctx, { defaultEnabled: true, baseRef: 'fresh' })
+
+    const released = await toggle.release({ sessionId: agent.id })
+
+    expect(released.removed).toMatchObject({ name: prepared.worktree.name, branch: prepared.worktree.name })
+    expect(released.kept).toBeNull()
+    expect(released.keptReason).toBeNull()
+    await expect(stat(prepared.worktree.path)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await git(root, 'branch', '--list', prepared.worktree.branch)).toBe('')
+    expect(await worktreePaths(root)).toEqual([root])
+  })
+
+  it('keeps a copy that carries commits and says how many', async () => {
+    const root = await repo()
+    const { ctx, agent, toggle } = await fixture(root)
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
+    await writeFile(join(prepared.worktree.path, 'tracked.txt'), 'work\n')
+    await git(prepared.worktree.path, 'commit', '-am', 'leftover work')
+
+    const released = await toggle.release({ sessionId: agent.id })
+
+    expect(released.kept).toMatchObject({ name: prepared.worktree.name })
+    expect(released.keptReason).toBe('dirty')
+    expect(released.error).toContain('1 new commit(s)')
+    expect(ctx.workingDirectory.get(agent.session)).toBe(root)
+    expect((await stat(prepared.worktree.path)).isDirectory()).toBe(true)
+    expect(await git(root, 'branch', '--list', prepared.worktree.branch)).toContain(prepared.worktree.name)
+  })
+
+  it('reports a locked copy instead of pretending the undo succeeded', async () => {
+    const root = await repo()
+    const { ctx, agent, toggle } = await fixture(root)
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
+    await git(root, 'worktree', 'lock', prepared.worktree.path)
+
+    const failure = await failureOf(() => toggle.release({ sessionId: agent.id }))
+
+    expect(failure.code).toBe('worktree-remove-failed')
+    expect(ctx.workingDirectory.get(agent.session)).toBe(root)
+    expect((await stat(prepared.worktree.path)).isDirectory()).toBe(true)
+    expect(await git(root, 'branch', '--list', prepared.worktree.branch)).toContain(prepared.worktree.name)
+  })
+
+  it('reports a refused branch delete instead of pretending the undo succeeded', async () => {
+    const root = await repo()
+    const { agent, toggle } = await fixture(root)
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
+    await lockBranch(root, prepared.worktree.branch)
+
+    const failure = await failureOf(() => toggle.release({ sessionId: agent.id }))
+
+    expect(failure.code).toBe('branch-delete-failed')
+    expect(failure.details).toMatchObject({ branch: prepared.worktree.branch })
+    expect(await git(root, 'branch', '--list', prepared.worktree.branch)).toContain(prepared.worktree.name)
+  })
+
+  it('keeps a copy whose directory is gone but whose claim cannot be read', async () => {
+    const root = await repo()
+    const { ctx, agent, toggle } = await fixture(root)
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
+    await rm(prepared.worktree.path, { recursive: true, force: true })
+
+    const released = await toggle.release({ sessionId: agent.id })
+
+    expect(released.keptReason).toBe('not-owned')
+    expect(released.kept).toMatchObject({ name: prepared.worktree.name })
+    expect(ctx.workingDirectory.get(agent.session)).toBe(root)
+  })
+})
+
+describe('prunable copies', () => {
+  it('deletes the branch before pruning the registration', async () => {
+    const root = await repo()
+    const { agent, toggle } = await fixture(root)
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
+    await rm(prepared.worktree.path, { recursive: true, force: true })
+
+    const removed = await toggle.discard({ path: root, name: prepared.worktree.name })
+
+    expect(removed).toEqual({
+      removed: true,
+      name: prepared.worktree.name,
+      branch: prepared.worktree.name,
+      path: prepared.worktree.path,
+    })
+    expect(await git(root, 'branch', '--list', prepared.worktree.branch)).toBe('')
+    expect(await worktreePaths(root)).toEqual([root])
+  })
+
+  it('leaves the registration alone when the branch cannot be deleted', async () => {
+    const root = await repo()
+    const { agent, toggle } = await fixture(root)
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
+    await rm(prepared.worktree.path, { recursive: true, force: true })
+    await lockBranch(root, prepared.worktree.branch)
+
+    const failure = await failureOf(() =>
+      toggle.discard({ path: root, name: prepared.worktree.name }),
+    )
+
+    expect(failure.code).toBe('branch-delete-failed')
+    expect(await worktreePaths(root)).toContain(prepared.worktree.path)
+  })
+})
+
+describe('detached copies', () => {
+  it('lists no branch and discards only the checkout', async () => {
+    const root = await repo()
+    const { ctx, agent, toggle } = await fixture(root)
+    const name = 'brisk-fern-1a2b'
+    const createdCopy = await ctx.worktrees.create(agent, { name, from: 'HEAD' })
+    await git(createdCopy.path, 'switch', '--detach', 'HEAD')
+    await ctx.workingDirectory.set(agent, createdCopy.path)
+
+    const listed = supportedList(await toggle.list({ path: root }))
+    expect(listed.items).toMatchObject([{ name, branch: null, prunable: false }])
+
+    const removed = await toggle.discard({ path: root, name })
+
+    expect(removed).toMatchObject({ removed: true, name, branch: null })
+    await expect(stat(createdCopy.path)).rejects.toMatchObject({ code: 'ENOENT' })
+    // The branch the copy was made from is not this call's to delete.
+    expect(await git(root, 'branch', '--list', name)).toContain(name)
+    expect(await worktreePaths(root)).toEqual([root])
+  })
+})
+
+describe('leftover branches', () => {
+  /**
+   * Create a copy, commit inside it, then delete the directory and prune the
+   * registration: the branch survives with no checkout, exactly the state the
+   * panel's cleanup group exists for.
+   * @param root - repository root.
+   * @returns the leftover branch name and its commit subject.
+   */
+  async function leftover(root: string): Promise<{ branch: string; path: string }> {
+    const { agent, toggle } = await fixture(root)
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
+    await writeFile(join(prepared.worktree.path, 'tracked.txt'), 'leftover\n')
+    await git(prepared.worktree.path, 'commit', '-am', 'leftover work')
+    await rm(prepared.worktree.path, { recursive: true, force: true })
+    await git(root, 'worktree', 'prune')
+    return { branch: prepared.worktree.name, path: prepared.worktree.path }
+  }
+
+  it('lists generated-name branches with no checkout, their size and latest commit', async () => {
+    const root = await repo()
+    const left = await leftover(root)
+    const toggle = currentToggle()
+
+    const listed = supportedList(await toggle.list({ path: root }))
+
+    expect(listed.items).toEqual([])
+    expect(listed.orphans).toHaveLength(1)
+    expect(listed.orphans[0]).toMatchObject({
+      branch: left.branch,
+      commits: 1,
+      subject: 'leftover work',
+    })
+    expect(listed.orphans[0]?.committedAt).toBeGreaterThan(0)
+  })
+
+  it('leaves ordinary and checked-out branches out of the group', async () => {
+    const root = await repo()
+    await git(root, 'branch', 'feature/user-thing')
+    const { ctx, agent, toggle } = await fixture(root)
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
+
+    const listed = supportedList(await toggle.list({ path: root }))
+
+    expect(listed.orphans).toEqual([])
+    expect(listed.items).toMatchObject([{ name: prepared.worktree.name }])
+    expect(ctx.workingDirectory.get(agent.session)).toBe(prepared.worktree.path)
+  })
+
+  it('deletes a leftover branch and stays idempotent on the second click', async () => {
+    const root = await repo()
+    const left = await leftover(root)
+
+    const removed = await currentToggle().discardBranch({ path: root, branch: left.branch })
+
+    expect(removed).toEqual({ removed: true, branch: left.branch })
+    expect(await git(root, 'branch', '--list', left.branch)).toBe('')
+    await expect(currentToggle().discardBranch({ path: root, branch: left.branch }))
+      .resolves.toEqual({ removed: true, branch: left.branch })
+  })
+
+  it('refuses a checked-out branch and a name the plugin never generated', async () => {
+    const root = await repo()
+    const { agent, toggle } = await fixture(root)
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
+
+    const inUse = await failureOf(() =>
+      toggle.discardBranch({ path: root, branch: prepared.worktree.branch }),
+    )
+    const ordinary = await failureOf(() => toggle.discardBranch({ path: root, branch: 'main' }))
+
+    expect(inUse.code).toBe('branch-in-use')
+    expect(ordinary.code).toBe('branch-name-invalid')
+    expect(await git(root, 'branch', '--list', prepared.worktree.branch)).toContain(prepared.worktree.name)
+  })
+})
+
+describe('scope verb', () => {
+  it('reports the copy, its project root and its own uncommitted count', async () => {
+    const root = await repo()
+    const { ctx, agent, toggle } = await fixture(root)
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
+    await writeFile(join(prepared.worktree.path, 'untracked.txt'), 'inside\n')
+
+    const scope = await toggle.scope({ sessionId: agent.id })
+
+    expect(scope).toEqual({
+      inWorktree: true,
+      worktree: prepared.worktree,
+      repositoryRoot: root,
+      changedFiles: 1,
+    })
+    expect(ctx.workingDirectory.get(agent.session)).toBe(prepared.worktree.path)
+  })
+
+  it('answers out-of-copy without moving the session or reading the source status', async () => {
+    const root = await repo()
+    const { ctx, agent, toggle } = await fixture(root)
+    await writeFile(join(root, 'untracked.txt'), 'source dirt\n')
+
+    const scope = await toggle.scope({ sessionId: agent.id })
+
+    expect(scope).toEqual({ inWorktree: false })
+    expect(ctx.workingDirectory.get(agent.session)).toBe(root)
+  })
+
+  it('reports no branch for a detached copy', async () => {
+    const root = await repo()
+    const { ctx, agent, toggle } = await fixture(root)
+    const name = 'brisk-fern-1a2b'
+    const createdCopy = await ctx.worktrees.create(agent, { name, from: 'HEAD' })
+    await git(createdCopy.path, 'switch', '--detach', 'HEAD')
+
+    const scope = await toggle.scope({ sessionId: agent.id })
+
+    expect(scope).toMatchObject({
+      inWorktree: true,
+      worktree: { name, path: createdCopy.path, branch: null },
+      repositoryRoot: root,
+    })
+  })
+
+  it('derives the copy from the directory when no verb has seen it', async () => {
+    const root = await repo()
+    const { ctx, agent, toggle } = await fixture(root)
+    const name = 'calm-island-9c1d'
+    const createdCopy = await ctx.worktrees.create(agent, { name, from: 'HEAD' })
+
+    const scope = await toggle.scope({ sessionId: agent.id })
+
+    expect(scope).toMatchObject({
+      inWorktree: true,
+      worktree: { name, path: createdCopy.path, branch: name },
+      repositoryRoot: root,
+      changedFiles: 0,
+    })
+  })
+})
+
+describe('kept copies', () => {
+  it('counts a copy whose delete was refused, so the sidebar can surface it', async () => {
+    const root = await repo()
+    const { agent, toggle } = await fixture(root)
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
+    await git(root, 'worktree', 'lock', prepared.worktree.path)
+
+    const failure = await failureOf(() => toggle.release({ sessionId: agent.id }))
+    expect(failure.code).toBe('worktree-remove-failed')
+
+    expect(supportedList(await toggle.list({ path: root })).keptCopies).toBe(1)
+  })
+
+  it('counts copies this host kept on leave until they are discarded', async () => {
+    const root = await repo()
+    const { agent, toggle } = await fixture(root)
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
+    const untracked = join(prepared.worktree.path, 'untracked.txt')
+    await writeFile(untracked, 'work\n')
+
+    const released = await toggle.release({ sessionId: agent.id })
+    expect(released.keptReason).toBe('dirty')
+    expect(supportedList(await toggle.list({ path: root })).keptCopies).toBe(1)
+
+    await rm(untracked)
+    await toggle.discard({ path: root, name: prepared.worktree.name })
+
+    expect(supportedList(await toggle.list({ path: root })).keptCopies).toBe(0)
   })
 })

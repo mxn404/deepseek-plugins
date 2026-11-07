@@ -1,6 +1,6 @@
 /**
- * The Connection fetch bridge: five exact POST routes on the shared `/api`
- * channel, one per verb, speaking the `client-request` / `server-response`
+ * The Connection fetch bridge: one exact POST route per verb on the shared
+ * `/api` channel, speaking the `client-request` / `server-response`
  * envelope the browser's `connection.rpc.call` already implements.
  *
  * Exact routes are the only shape an out-of-tree plugin can claim: `/api` is
@@ -13,7 +13,9 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { ConnectionRpcResult } from '@deepseek-ai/dsh-client-connection'
 import type {} from '@deepseek-ai/dsh-client-connection'
-import type { DiscardValue, ListValue, PrepareValue, ReleaseValue, StatusValue, WorktreeToggle } from './handlers.ts'
+import type {
+  DiscardBranchValue, DiscardValue, ListValue, PrepareValue, ReleaseValue, ScopeValue, StatusValue, WorktreeToggle,
+} from './handlers.ts'
 import { WorktreeToggleError } from './handlers.ts'
 
 /** Absolute prefix every route below lives under. */
@@ -23,7 +25,7 @@ export const API_PREFIX = '/api/dsh-worktree-switch'
 export const PLUGIN_ID = 'dsh-worktree-switch'
 
 /** One route per verb. */
-export const ENDPOINTS = ['status', 'prepare', 'release', 'list', 'discard'] as const
+export const ENDPOINTS = ['status', 'prepare', 'release', 'scope', 'list', 'discard', 'discardBranch'] as const
 
 /** A verb this route table serves. */
 export type Endpoint = (typeof ENDPOINTS)[number]
@@ -94,7 +96,9 @@ export async function dispatch(
   endpoint: Endpoint,
   payload: Record<string, unknown>,
   signal: AbortSignal,
-): Promise<ConnectionRpcResult<StatusValue | PrepareValue | ReleaseValue | ListValue | DiscardValue>> {
+): Promise<ConnectionRpcResult<
+  StatusValue | PrepareValue | ReleaseValue | ScopeValue | ListValue | DiscardValue | DiscardBranchValue
+>> {
   try {
     if (endpoint === 'status') {
       const sessionId = requiredString(payload, 'sessionId')
@@ -111,6 +115,11 @@ export async function dispatch(
       if ('failure' in sessionId) throw sessionId.failure
       return ok(await toggle.release({ sessionId: sessionId.value }, signal))
     }
+    if (endpoint === 'scope') {
+      const sessionId = requiredString(payload, 'sessionId')
+      if ('failure' in sessionId) throw sessionId.failure
+      return ok(await toggle.scope({ sessionId: sessionId.value }, signal))
+    }
     if (endpoint === 'list') {
       const path = requiredString(payload, 'path')
       if ('failure' in path) throw path.failure
@@ -118,6 +127,11 @@ export async function dispatch(
     }
     const path = requiredString(payload, 'path')
     if ('failure' in path) throw path.failure
+    if (endpoint === 'discardBranch') {
+      const branch = requiredString(payload, 'branch')
+      if ('failure' in branch) throw branch.failure
+      return ok(await toggle.discardBranch({ path: path.value, branch: branch.value }, signal))
+    }
     const name = requiredString(payload, 'name')
     if ('failure' in name) throw name.failure
     return ok(await toggle.discard({ path: path.value, name: name.value }, signal))

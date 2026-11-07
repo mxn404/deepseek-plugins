@@ -11,14 +11,40 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
+import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
 import type {} from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
-import type { ListValue, PrepareBase, PrepareValue, ReleaseValue, StatusValue, WorktreeItem, WorktreeRef } from '../types.ts'
+import type {
+  CopyRef, KeptReason, ListValue, OrphanBranch, PrepareBase, PrepareValue, ReleaseValue, ScopeValue,
+  StatusValue, WorktreeItem,
+} from '../types.ts'
 import { readIntent, writeIntent } from './intent.ts'
 import { callHost } from './rpc.ts'
 
+declare module '@deepseek-ai/dsh-session-projection/types' {
+  interface SessionProjectionMap {
+    /**
+     * Effective session directory recorded by the host's working-directory
+     * service. Declared here so the browser half can read the projection key
+     * without importing the host package; the key's type is identical to the
+     * declaration that host package merges in.
+     */
+    workingDirectory: string | null
+  }
+}
+
 /** Which of the switch's six faces is showing. */
 export type TogglePhase = 'checking' | 'off' | 'creating' | 'reverting' | 'ready' | 'failed' | 'disabled'
+
+/** A copy the switch left on disk when it was turned off, and why it stayed. */
+export interface KeptCopy {
+  /** The copy that is still there. */
+  readonly worktree: CopyRef
+  /** Why the host kept it: it holds content, or its ownership is unprovable. */
+  readonly reason: KeptReason
+  /** Host-local detail about the kept copy (change count, new commits). */
+  readonly error?: string
+}
 
 /** One session's switch state. */
 export interface ToggleState {
@@ -27,7 +53,7 @@ export interface ToggleState {
   /** The switch position: whether new sessions in this project isolate. */
   readonly intent: boolean
   /** The copy this session runs in, once there is one. */
-  readonly worktree: WorktreeRef | null
+  readonly worktree: CopyRef | null
   /** Repository root the project belongs to, once known. */
   readonly repositoryRoot: string | null
   /** Changed and untracked files in the source checkout, once known. */
@@ -36,6 +62,13 @@ export interface ToggleState {
   readonly base: PrepareBase | null
   /** Readable failure for the failed face. */
   readonly error: string | null
+  /**
+   * The copy the last leave kept, with the reason.
+   *
+   * A leave that deleted its copy clears this; a leave that kept one fills it,
+   * so "off" never claims a clean undo it did not get.
+   */
+  readonly kept: KeptCopy | null
 }
 
 /** The initial state: nothing is known until the host answers. */
@@ -47,6 +80,7 @@ const INITIAL: ToggleState = {
   sourceDirty: 0,
   base: null,
   error: null,
+  kept: null,
 }
 
 /** The face a slot component receives for one session. */
@@ -70,6 +104,199 @@ function messageOf(error: unknown): string {
   return text === '' ? 'unknown error' : text
 }
 
+/** Which event a frame-level notice reports. */
+export type NoticeKind = 'kept' | 'failed'
+
+/** One one-shot frame-level notice; null means nothing is showing. */
+export interface NoticeState {
+  /** Raises on every notice, so React replaces the frame instead of mutating it. */
+  readonly seq: number
+  /** Whether a leave kept a copy or failed outright. */
+  readonly kind: NoticeKind
+  /** The copy a leave kept; null for a failed leave. */
+  readonly worktree: CopyRef | null
+  /** Why the copy was kept; null for a failed leave. */
+  readonly reason: KeptReason | null
+  /** Host-local detail: the change count or the failure message. */
+  readonly message: string | null
+}
+
+/** The face the frame-level notice receives. */
+export interface NoticeBinding {
+  /** Observable state; one notice at a time. */
+  readonly hooks: { readonly notice: SnapshotStore<NoticeState | null> }
+  /** Clear the notice without opening anything. */
+  dismiss(): void
+  /** Open the panel where the leftover can be cleaned up. */
+  openPanel(): void
+}
+
+/**
+ * Owns the one-shot notice a leave raises.
+ *
+ * Kept apart from the switch controller because it is frame-scoped and lives
+ * outside every session: the notice survives the session header, and unloading
+ * the plugin must drop it without touching any session state.
+ */
+export class NoticeController {
+  private readonly store = createSnapshotStore<NoticeState | null>(null)
+  private seq = 0
+
+  /**
+   * @param openPanel - opens this plugin's panel.
+   */
+  constructor(private readonly openPanel: () => void) {}
+
+  /** The stable face handed to the overlay component. */
+  readonly face: NoticeBinding = {
+    hooks: { notice: this.store },
+    dismiss: () => { this.store.set(null) },
+    openPanel: () => {
+      this.store.set(null)
+      this.openPanel()
+    },
+  }
+
+  /**
+   * Show one notice, replacing whatever was showing.
+   * @param notice - what happened, without its sequence.
+   */
+  raise(notice: Omit<NoticeState, 'seq'>): void {
+    this.seq += 1
+    this.store.set({ seq: this.seq, ...notice })
+  }
+}
+
+/** Whether the header badge has an answer for its session yet. */
+export type ScopePhase = 'checking' | 'in' | 'out' | 'failed'
+
+/** One session's answer from the lightweight `scope` verb. */
+export interface ScopeState {
+  /** `in` is the only phase that renders; the rest keep the header quiet. */
+  readonly phase: ScopePhase
+  /** The copy the session runs in, while `in`. */
+  readonly worktree: CopyRef | null
+  /** Repository root of the project the copy came from, while `in`. */
+  readonly repositoryRoot: string | null
+  /** Changed and untracked files inside the copy. */
+  readonly changedFiles: number
+}
+
+/** The first answer before the host has said anything. */
+const EMPTY_SCOPE: ScopeState = {
+  phase: 'checking',
+  worktree: null,
+  repositoryRoot: null,
+  changedFiles: 0,
+}
+
+/** The face the header badge receives for one session. */
+export interface BadgeBinding {
+  /** Observable copy identity, read through the synthesized selector hook. */
+  readonly hooks: { readonly scope: SnapshotStore<ScopeState> }
+  /** Ask the host again; expected after every working-directory change. */
+  query(): void
+  /** Open the panel with this session's copy highlighted. */
+  open(): void
+}
+
+/**
+ * Answers "does this session run in a copy?" per session, once per directory.
+ *
+ * Deliberately not polled: the badge subscribes to the `workingDirectory`
+ * projection and asks again only when that value changes, which is also what
+ * makes it appear right after the switch creates a copy.
+ */
+export class BadgeController {
+  private readonly bindings = new Map<string, InternalScope>()
+  private readonly lifetime = new AbortController()
+
+  /**
+   * @param ctx - browser Cordis context.
+   * @param openCopy - opens the panel with one copy path highlighted.
+   */
+  constructor(
+    private readonly ctx: Context,
+    private readonly openCopy: (path: string) => void,
+  ) {}
+
+  /**
+   * The binding for one session, created on first use.
+   * @param sessionId - the session whose header badge is rendering.
+   * @returns the stable binding.
+   */
+  binding(sessionId: SessionId): BadgeBinding {
+    const key = String(sessionId)
+    const existing = this.bindings.get(key)
+    if (existing !== undefined) return existing.face
+    const binding = new InternalScope(this.ctx, key, this.lifetime.signal, this.openCopy)
+    this.bindings.set(key, binding)
+    return binding.face
+  }
+
+  /** Abort in-flight reads when the plugin unloads. */
+  dispose(): void {
+    this.lifetime.abort(new Error('worktree switch unloaded'))
+    this.bindings.clear()
+  }
+}
+
+/** The concrete per-session scope reader behind one {@link BadgeBinding}. */
+class InternalScope {
+  private readonly store = createSnapshotStore<ScopeState>(EMPTY_SCOPE)
+  /** Last answer generation; a stale reply to an older directory must not win. */
+  private generation = 0
+
+  readonly face: BadgeBinding
+
+  /**
+   * @param ctx - browser Cordis context.
+   * @param sessionId - wire session identity.
+   * @param signal - plugin lifetime cancellation.
+   * @param openCopy - opens the panel with one copy path highlighted.
+   */
+  constructor(
+    private readonly ctx: Context,
+    private readonly sessionId: string,
+    private readonly signal: AbortSignal,
+    private readonly openCopy: (path: string) => void,
+  ) {
+    this.face = {
+      hooks: { scope: this.store },
+      query: () => { this.query() },
+      open: () => {
+        const state = this.store.getSnapshot()
+        if (state.worktree !== null) this.openCopy(state.worktree.path)
+      },
+    }
+  }
+
+  /** Ask the host where this session is; a superseding call wins. */
+  query(): void {
+    void this.run()
+  }
+
+  private async run(): Promise<void> {
+    this.generation += 1
+    const generation = this.generation
+    try {
+      const value = await callHost<ScopeValue>(this.ctx, 'scope', { sessionId: this.sessionId }, this.signal)
+      if (this.signal.aborted || generation !== this.generation) return
+      this.store.set(value.inWorktree
+        ? {
+          phase: 'in',
+          worktree: value.worktree,
+          repositoryRoot: value.repositoryRoot,
+          changedFiles: value.changedFiles,
+        }
+        : { phase: 'out', worktree: null, repositoryRoot: null, changedFiles: 0 })
+    } catch {
+      if (this.signal.aborted || generation !== this.generation) return
+      this.store.set({ phase: 'failed', worktree: null, repositoryRoot: null, changedFiles: 0 })
+    }
+  }
+}
+
 /**
  * One controller per plugin instance: it caches the state of every session the
  * switch has rendered for, and owns their composer blocks.
@@ -80,8 +307,14 @@ export class ToggleController {
 
   /**
    * @param ctx - browser Cordis context.
+   * @param notices - frame-level notice the switch raises when a leave keeps a copy or fails.
+   * @param onLeftover - asks the panel to re-count leftovers after a leave kept one.
    */
-  constructor(private readonly ctx: Context) {}
+  constructor(
+    private readonly ctx: Context,
+    private readonly notices: NoticeController,
+    private readonly onLeftover: () => void,
+  ) {}
 
   /**
    * The binding for one session, created on first use.
@@ -92,7 +325,13 @@ export class ToggleController {
     const key = String(sessionId)
     const existing = this.bindings.get(key)
     if (existing !== undefined) return existing
-    const binding = new InternalBinding(this.ctx, key, this.lifetime.signal)
+    const binding = new InternalBinding(
+      this.ctx,
+      key,
+      this.lifetime.signal,
+      this.notices,
+      this.onLeftover,
+    )
     this.bindings.set(key, binding.face)
     return binding.face
   }
@@ -127,6 +366,8 @@ class InternalBinding {
     private readonly ctx: Context,
     private readonly sessionId: string,
     private readonly signal: AbortSignal,
+    private readonly notices: NoticeController,
+    private readonly onLeftover: () => void,
   ) {
     this.face = {
       hooks: { toggle: this.store },
@@ -167,6 +408,7 @@ class InternalBinding {
         sourceDirty: status.sourceDirty,
         base: null,
         error: null,
+        kept: null,
       }
       if (status.sessionWorktree !== null) {
         this.store.set({ ...base, phase: 'ready' })
@@ -217,6 +459,7 @@ class InternalBinding {
         sourceDirty: prepared.sourceDirty,
         base: prepared.state === 'created' ? prepared.base : null,
         error: null,
+        kept: null,
       })
     } catch (error) {
       if (this.signal.aborted) return
@@ -249,23 +492,85 @@ class InternalBinding {
   /** Ask the host to undo the copy and settle the switch on what it reported. */
   private async leave(): Promise<void> {
     const before = this.store.getSnapshot()
-    this.store.set({ ...before, phase: 'reverting', error: null })
+    this.store.set({ ...before, phase: 'reverting', error: null, kept: null })
     try {
-      await callHost<ReleaseValue>(this.ctx, 'release', { sessionId: this.sessionId }, this.signal)
+      const value = await callHost<ReleaseValue>(this.ctx, 'release', { sessionId: this.sessionId }, this.signal)
       if (this.signal.aborted) return
       const now = this.store.getSnapshot()
-      this.store.set({ ...now, phase: 'off', intent: false, worktree: null, base: null, error: null })
+      const kept = value.kept !== null && value.keptReason !== null
+        ? {
+          worktree: value.kept,
+          reason: value.keptReason,
+          ...value.error === undefined ? {} : { error: value.error },
+        }
+        : null
+      this.store.set({
+        ...now,
+        phase: 'off',
+        intent: false,
+        worktree: null,
+        base: null,
+        error: null,
+        kept,
+      })
+      // A kept copy is a leftover someone has to clean up: tell them once, and
+      // let the sidebar count learn about it without waiting for a panel open.
+      if (kept !== null) {
+        this.notices.raise({
+          kind: 'kept',
+          worktree: kept.worktree,
+          reason: kept.reason,
+          message: kept.error ?? null,
+        })
+        this.onLeftover()
+      }
     } catch (error) {
       if (this.signal.aborted) return
       const now = this.store.getSnapshot()
       // A refused release leaves the session where it was. Showing "ready" with
       // the reason is honest; showing "off" over a copy in use would not be.
+      const message = messageOf(error)
       this.store.set({
         ...now,
         phase: now.worktree === null ? 'off' : 'ready',
         intent: false,
-        error: messageOf(error),
+        error: message,
+        kept: null,
       })
+      // A delete the host could not finish is exactly the silent "off" the
+      // ADR forbids, so the failure gets the same one-shot notice as a kept copy.
+      this.notices.raise({ kind: 'failed', worktree: now.worktree, reason: null, message })
+      // Whatever is left is a cleanup item: recount it, and ask the host where
+      // the session actually is now (a refused branch delete still removed the
+      // checkout and moved the session back).
+      this.onLeftover()
+      void this.recheck()
+    }
+  }
+
+  /**
+   * Re-read the session's projected state after a failure.
+   *
+   * The failing verb may still have moved the session before the delete it
+   * attempted failed, so the cached "ready in <copy>" face can be stale. This
+   * asks once which directory the host now records and shows that; it never
+   * creates, releases, or retries anything.
+   */
+  private async recheck(): Promise<void> {
+    try {
+      const status = await callHost<StatusValue>(this.ctx, 'status', { sessionId: this.sessionId }, this.signal)
+      if (this.signal.aborted || !status.supported) return
+      const now = this.store.getSnapshot()
+      this.store.set({
+        ...now,
+        phase: status.sessionWorktree === null ? 'off' : 'ready',
+        worktree: status.sessionWorktree,
+        repositoryRoot: status.repositoryRoot,
+        sourceDirty: status.sourceDirty,
+      })
+    } catch {
+      // The failure that brought us here is already on screen; a second one
+      // from the re-read would only obscure it.
     }
   }
 
@@ -276,12 +581,12 @@ class InternalBinding {
     if (this.project !== null) writeIntent(this.project, next)
     if (!next) {
       if (state.intent === next) return
-      this.store.set({ ...state, intent: false, error: null })
+      this.store.set({ ...state, intent: false, error: null, kept: null })
       void this.release()
       return
     }
     if (state.intent === next) return
-    this.store.set({ ...state, intent: true, error: null })
+    this.store.set({ ...state, intent: true, error: null, kept: null })
     if (state.phase === 'off' || state.phase === 'failed') void this.create()
   }
 
@@ -290,7 +595,7 @@ class InternalBinding {
     const state = this.store.getSnapshot()
     if (state.phase !== 'failed') return
     if (this.project !== null) writeIntent(this.project, true)
-    this.store.set({ ...state, intent: true, phase: 'off', error: null })
+    this.store.set({ ...state, intent: true, phase: 'off', error: null, kept: null })
     void this.create()
   }
 
@@ -312,6 +617,10 @@ export interface PanelGroup {
   readonly supported: boolean
   /** The copies under it. */
   readonly items: readonly WorktreeItem[]
+  /** Generated-name branches no copy checks out, newest first. */
+  readonly orphans: readonly OrphanBranch[]
+  /** Kept copies this host instance left on disk and that still exist here. */
+  readonly keptCopies: number
   /** Per-project failure text, when reading it failed. */
   readonly error: string | null
 }
@@ -324,8 +633,35 @@ export interface PanelState {
   readonly groups: readonly PanelGroup[]
   /** The last refresh or discard failure. */
   readonly error: string | null
-  /** Row key currently being discarded, if any. */
+  /** Row key currently being discarded or deleted, if any. */
   readonly busy: string | null
+  /** Rows that still need cleanup: leftover branches plus kept copies. */
+  readonly cleanup: number
+  /** Copy paths a session currently runs in; empty when none is known. */
+  readonly current: readonly string[]
+}
+
+/**
+ * The row key that identifies one copy's row in the panel.
+ *
+ * The panel's armed/busy state and this controller's in-flight key must agree
+ * character for character, so both sides build the key here.
+ * @param project - workspace directory the row belongs to.
+ * @param name - copy name.
+ * @returns the stable row key.
+ */
+export function copyRowKey(project: string, name: string): string {
+  return `${project}\u0000${name}`
+}
+
+/**
+ * The row key that identifies one leftover branch's row in the panel.
+ * @param project - workspace directory the row belongs to.
+ * @param branch - branch name.
+ * @returns the stable row key.
+ */
+export function branchRowKey(project: string, branch: string): string {
+  return `${project}\u0000branch:${branch}`
 }
 
 /** The face the panel and its sidebar icon receive. */
@@ -336,6 +672,10 @@ export interface PanelBinding {
   refresh(): void
   /** Delete one copy and re-read the pool it lived in. */
   discard(project: string, name: string): void
+  /** Delete one leftover branch and re-read the pool it lived in. */
+  discardBranch(project: string, branch: string): void
+  /** Mark one copy as the current one, where a session snapshot cannot say it. */
+  highlight(path: string): void
   /** Leave the panel. */
   close(): void
 }
@@ -349,8 +689,18 @@ export class PanelController {
     groups: [],
     error: null,
     busy: null,
+    cleanup: 0,
+    current: [],
   })
   private readonly lifetime = new AbortController()
+  /** The read in flight, so overlapping refreshes coalesce into one more read. */
+  private running: Promise<void> | null = null
+  /** A refresh arrived while one was in flight. */
+  private again = false
+  /** A copy path the badge click asked to highlight; wins over the derived ones. */
+  private highlighted: string | null = null
+  /** The failure a completed read must publish; a fresh read clears it. */
+  private failure: string | null = null
 
   /**
    * @param ctx - browser Cordis context.
@@ -363,22 +713,71 @@ export class PanelController {
     hooks: { worktrees: this.store },
     refresh: () => { this.refresh() },
     discard: (project, name) => { void this.discard(project, name) },
-    close: () => { this.leave() },
+    discardBranch: (project, branch) => { void this.discardBranch(project, branch) },
+    highlight: path => { this.highlight(path) },
+    close: () => {
+      this.highlighted = null
+      this.leave()
+    },
+  }
+
+  /**
+   * Start the count the sidebar entry shows.
+   *
+   * Runs without the panel being open, so a leftover is visible from the
+   * sidebar, and follows the workspace list because a project added later has
+   * a pool this page has never read.
+   * @returns disposer for the workspace subscription.
+   */
+  watch(): () => void {
+    this.refresh()
+    const workspaces = this.ctx.get('workspaces')
+    if (workspaces === undefined) return () => {}
+    return workspaces.list.subscribe(() => { this.refresh() })
   }
 
   /** Read every workspace's pool; projects that fail stay visible with their error. */
   refresh(): void {
-    void this.run()
+    this.failure = null
+    this.start()
+  }
+
+  /** Run one read, or queue exactly one more behind the read in flight. */
+  private start(): void {
+    if (this.running !== null) {
+      this.again = true
+      return
+    }
+    this.running = this.run().finally(() => {
+      this.running = null
+      if (this.again) {
+        this.again = false
+        this.start()
+      }
+    })
+  }
+
+  /** Mark one copy current without asking the host: the badge already knows it. */
+  highlight(path: string): void {
+    this.highlighted = path
+    this.store.set({ ...this.store.getSnapshot(), current: [path] })
   }
 
   private async run(): Promise<void> {
     const workspaces = this.ctx.get('workspaces')
     if (workspaces === undefined) {
-      this.store.set({ loading: false, groups: [], error: 'the workspace service is not mounted', busy: null })
+      this.store.set({
+        loading: false,
+        groups: [],
+        error: 'the workspace service is not mounted',
+        busy: null,
+        cleanup: 0,
+        current: [],
+      })
       return
     }
     const items = workspaces.list.getSnapshot().items
-    this.store.set({ ...this.store.getSnapshot(), loading: true, error: null })
+    this.store.set({ ...this.store.getSnapshot(), loading: true })
     const groups: PanelGroup[] = []
     for (const workspace of items) {
       try {
@@ -389,6 +788,8 @@ export class PanelController {
             title: workspace.title,
             supported: true,
             items: listed.items,
+            orphans: listed.orphans,
+            keptCopies: listed.keptCopies,
             error: null,
           }
           : {
@@ -396,6 +797,8 @@ export class PanelController {
             title: workspace.title,
             supported: false,
             items: [],
+            orphans: [],
+            keptCopies: 0,
             error: null,
           })
       } catch (error) {
@@ -405,24 +808,94 @@ export class PanelController {
           title: workspace.title,
           supported: true,
           items: [],
+          orphans: [],
+          keptCopies: 0,
           error: messageOf(error),
         })
       }
     }
     if (this.lifetime.signal.aborted) return
-    this.store.set({ loading: false, groups, error: null, busy: null })
+    this.store.set({
+      loading: false,
+      groups,
+      error: this.failure,
+      busy: null,
+      cleanup: groups.reduce((sum, group) => sum + group.orphans.length + group.keptCopies, 0),
+      current: this.highlighted !== null ? [this.highlighted] : this.currentCopies(groups),
+    })
+  }
+
+  /**
+   * The copies a session is currently inside.
+   *
+   * Read from the Session Controller instead of the host: it is already on the
+   * page, and a new host event would have to be threaded through the wire for
+   * one highlight. The main-view retention count tells which session is the
+   * one on screen, so archived rows never mark a copy.
+   * @param groups - the groups just read.
+   * @returns copy paths that session's working directory falls inside.
+   */
+  private currentCopies(groups: readonly PanelGroup[]): readonly string[] {
+    // The Context type is shared with the host half, and the host's own
+    // `dsh-session` service claims the same `sessions` key, so the client-side
+    // Session Controller is read through its own face instead of that key's
+    // last declaration in this package's type program.
+    const sessions = this.ctx.get('sessions') as unknown as ISessions | undefined
+    if (sessions === undefined) return []
+    const list = sessions.list.getSnapshot()
+    const found = new Set<string>()
+    for (const row of Object.values(list.byId)) {
+      if ((row.retainedBy.mainView ?? 0) <= 0) continue
+      const binding = sessions.binding(row.id)
+      if (binding === undefined) continue
+      const directory = binding.session.projections.faceOf('workingDirectory').getSnapshot()
+      if (typeof directory !== 'string' || directory === '') continue
+      for (const group of groups) {
+        for (const item of group.items) {
+          if (directory === item.path || directory.startsWith(`${item.path}/`)) found.add(item.path)
+        }
+      }
+    }
+    return [...found]
   }
 
   private async discard(project: string, name: string): Promise<void> {
-    const key = `${project}\u0000${name}`
+    const key = copyRowKey(project, name)
     this.store.set({ ...this.store.getSnapshot(), busy: key, error: null })
     try {
       await callHost(this.ctx, 'discard', { path: project, name }, this.lifetime.signal)
       this.store.set({ ...this.store.getSnapshot(), busy: null })
-      await this.run()
+      this.refresh()
     } catch (error) {
       if (this.lifetime.signal.aborted) return
       this.store.set({ ...this.store.getSnapshot(), busy: null, error: messageOf(error) })
+    }
+  }
+
+  /**
+   * Delete one leftover branch.
+   *
+   * A host refusal (the branch is gone already, or a copy has it checked out)
+   * still re-reads the pool: the row the user clicked may be stale, and the
+   * refreshed list is the honest answer either way.
+   * @param project - workspace directory the branch's pool belongs to.
+   * @param branch - branch to delete.
+   */
+  private async discardBranch(project: string, branch: string): Promise<void> {
+    const key = branchRowKey(project, branch)
+    this.store.set({ ...this.store.getSnapshot(), busy: key, error: null })
+    try {
+      await callHost(this.ctx, 'discardBranch', { path: project, branch }, this.lifetime.signal)
+      this.store.set({ ...this.store.getSnapshot(), busy: null })
+      this.refresh()
+    } catch (error) {
+      if (this.lifetime.signal.aborted) return
+      // A refusal may mean the row was stale (the branch is gone already), so
+      // the list is re-read; the error line survives that read on purpose.
+      const message = messageOf(error)
+      this.failure = message
+      this.store.set({ ...this.store.getSnapshot(), busy: null, error: message })
+      this.start()
     }
   }
 
