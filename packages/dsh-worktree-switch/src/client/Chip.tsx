@@ -10,11 +10,12 @@
  * @module dsh-worktree-switch/client/Chip
  */
 
-import { useEffect, type ReactElement } from 'react'
+import { useEffect, useRef, type ReactElement } from 'react'
 import { Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
+import { switchPosition } from './state.ts'
 import type { ChipBinding, ToggleState } from './state.ts'
 import type { WorktreeToggleKey } from './locales.ts'
 
@@ -79,7 +80,14 @@ export function chipHint(state: ToggleState, t: Translate): string {
         ? t('chip.hint.detached', { path: copy?.path ?? '' })
         : t('chip.hint.ready', { branch: copy.branch, path: copy.path })]
       if (state.base?.kind === 'fallback') parts.push(t('chip.hint.baseFallback'))
-      if (!state.intent) parts.push(t('chip.hint.intentOff', { name: state.worktree?.name ?? '' }))
+      // The isolation default being off while this session runs in a copy is
+      // the inherited-copy state, not a failed leave: only an error means the
+      // leave itself did not happen.
+      if (!state.intent) {
+        parts.push(state.error === null
+          ? t('chip.hint.isolationOff')
+          : t('chip.hint.intentOff', { name: state.worktree?.name ?? '' }))
+      }
       if (state.sourceDirty > 0) parts.push(t('chip.hint.dirty', { count: state.sourceDirty }))
       if (state.error !== null) parts.push(state.error)
       return parts.join(' ')
@@ -98,15 +106,38 @@ export function chipHint(state: ToggleState, t: Translate): string {
  * @returns the switch, or null outside the blank-session hero.
  */
 export function WorktreeChip(props: WorktreeChipProps): ReactElement | null {
-  const { useSession, useToggle, ensure, setIntent, retry, block, t } = props
+  const { useSession, useProjection, useToggle, ensure, recheck, follow, setIntent, retry, block, t } = props
   const hero = useSession(session => session.blank && session.openState === 'open')
+  // The host records the effective directory as a projection; a change here is
+  // the only announcement of a `/new` inheritance, a host self-heal, or a
+  // settled leave.
+  const workingDirectory = useProjection('workingDirectory')
   const state = useToggle(current => current)
+  // The control reports where the session runs, not the project preference.
+  const position = switchPosition(state)
+
+  // Tell the binding whether it may create at all: a check already in flight
+  // when this session stops being blank must not move it afterwards.
+  useEffect(() => {
+    follow(hero)
+    return () => { follow(false) }
+  }, [follow, hero])
 
   // The slot renders in every open session's composer; only the blank-session
-  // hero may create a copy, so the first round trip waits for that state.
+  // hero may create a copy, so the first round trip waits for that state. The
+  // first render is not a directory change: it starts the switch, and every
+  // later change is a recheck. Outside the hero the chip follows nothing, so a
+  // session with history can never be moved by it.
+  const followed = useRef(false)
   useEffect(() => {
-    if (hero) ensure()
-  }, [ensure, hero])
+    if (!hero) return
+    if (!followed.current) {
+      followed.current = true
+      ensure()
+      return
+    }
+    recheck()
+  }, [ensure, hero, recheck, workingDirectory])
 
   useEffect(() => {
     if (!hero) {
@@ -140,7 +171,7 @@ export function WorktreeChip(props: WorktreeChipProps): ReactElement | null {
     <div
       className="dsh-wt-chip"
       data-phase={state.phase}
-      data-intent={state.intent ? 'on' : 'off'}
+      data-intent={position ? 'on' : 'off'}
       data-kept={state.kept === null ? 'false' : state.kept.reason}
       data-hint={hint}
     >
@@ -149,12 +180,12 @@ export function WorktreeChip(props: WorktreeChipProps): ReactElement | null {
           <button
             type="button"
             role="switch"
-            aria-checked={state.intent}
+            aria-checked={position}
             aria-label={t('chip.label')}
             className="dsh-wt-switch"
             data-phase={state.phase}
             disabled={locked}
-            onClick={() => { setIntent(!state.intent) }}
+            onClick={() => { setIntent(!position) }}
           >
             <span className="dsh-wt-dot" aria-hidden="true" />
             <span className="dsh-wt-label">{chipLabel(state, t)}</span>
