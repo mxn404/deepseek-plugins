@@ -15,7 +15,9 @@ Code 的 `/clear` 对齐：旧对话完整留在侧边栏历史里，上下文�
 - **工作目录（包括 worktree 副本）会继承**：新会话的创建目录仍是 Workspace 路径，但工作
   目录与当前会话一致。因此在 worktree 会话里 `/clear` 会留在**同一个 worktree**，而不是像
   普通新会话那样让 `dsh-worktree-switch` 再建一份副本——`dsh-worktree-switch` 看到新会话已
-  在副本里，只显示 ready，不再 prepare。
+  在副本里，只显示 ready，不再 prepare。跨插件前提：`/new` 只在当前工作目录上原地开新
+  对话，所以会话在副本里时新对话继承同一份副本；这份副本仍归原会话，离开时只回源检出、
+  不弹提示，见 [`dsh-worktree-switch` 的 README](../dsh-worktree-switch/README.md)。
 - 旧会话原样保留（侧边栏历史、`/resume` 语义上的可回）。
 - 只在当前 Peer 有 `session/create` 权限时注册；只读的远程访问者看不到这两行。
 - 不提交任何提示词：`action` 类型会消费掉 `/clear` / `/new` 这个 token。
