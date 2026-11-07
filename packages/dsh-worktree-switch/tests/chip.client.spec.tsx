@@ -166,6 +166,119 @@ describe('the creating face', () => {
   })
 })
 
+describe('an inherited copy on mount', () => {
+  it('shows the switch on, names the copy, and never moves the session out of it', async () => {
+    const harness = await setup()
+    // The project's isolation default is off, yet this session already runs in
+    // a copy — the state `/new` inherits. Mounting must report that, not undo it.
+    scriptStatus(harness, supportedStatus({ sessionWorktree: COPY, defaultEnabled: false }))
+    harness.connection.setAnswer('release', () => ok(releaseValue()))
+
+    const view = renderChip(harness)
+    await waitFor(() => { expect(view.view.getByText(`Worktree: ${COPY.name}`)).toBeTruthy() })
+
+    const chip = chipOf(view)
+    expect(chip.getAttribute('data-phase')).toBe('ready')
+    expect(chip.getAttribute('data-intent')).toBe('on')
+    expect(switchOf(view).getAttribute('aria-checked')).toBe('true')
+    expect(switchOf(view).disabled).toBe(false)
+    expect(harness.connection.callsFor('release')).toHaveLength(0)
+    expect(harness.connection.callsFor('prepare')).toHaveLength(0)
+    // The project default is off, but this session is not moving: the hover
+    // says where new sessions start instead of claiming a failed leave.
+    const hint = chip.getAttribute('data-hint') ?? ''
+    expect(hint).toContain(en['chip.hint.isolationOff'])
+    expect(hint).not.toContain(en['chip.hint.intentOff'].replace('{name}', COPY.name))
+  })
+})
+
+describe('following the working-directory projection', () => {
+  it('turns itself on when a reused blank session is adopted into a copy', async () => {
+    const harness = await setup()
+    let cwd = REPOSITORY
+    // The project's isolation default is off, so the first check leaves the
+    // blank session in the source checkout.
+    harness.connection.setAnswer('status', () => ok(supportedStatus({
+      defaultEnabled: false,
+      sessionWorktree: cwd === REPOSITORY ? null : COPY,
+    })))
+    harness.connection.setAnswer('release', () => ok(releaseValue()))
+
+    const view = renderChip(harness)
+    await waitFor(() => { expect(view.view.getByText('Worktree off')).toBeTruthy() })
+    const statusCalls = harness.connection.callsFor('status').length
+
+    // The host adopts the blank session into an existing copy (`/new`).
+    cwd = COPY.path
+    await act(async () => { harness.setWorkingDirectory(COPY.path) })
+    await waitFor(() => { expect(view.view.getByText(`Worktree: ${COPY.name}`)).toBeTruthy() })
+
+    expect(chipOf(view).getAttribute('data-phase')).toBe('ready')
+    expect(chipOf(view).getAttribute('data-intent')).toBe('on')
+    expect(switchOf(view).getAttribute('aria-checked')).toBe('true')
+    expect(harness.connection.callsFor('status').length).toBeGreaterThan(statusCalls)
+    // A session that already has a copy is never moved out of it on a recheck.
+    expect(harness.connection.callsFor('release')).toHaveLength(0)
+    expect(harness.connection.callsFor('prepare')).toHaveLength(0)
+  })
+
+  it('rebuilds a vanished copy exactly once while isolation is on', async () => {
+    const harness = await setup()
+    let cwd = REPOSITORY
+    harness.connection.setAnswer('status', () => ok(supportedStatus({
+      sessionWorktree: cwd === REPOSITORY ? null : COPY,
+    })))
+    harness.connection.setAnswer('prepare', () => {
+      cwd = COPY.path
+      return ok(prepareValue())
+    })
+
+    const view = renderChip(harness)
+    await waitFor(() => { expect(view.view.getByText(`Worktree: ${COPY.name}`)).toBeTruthy() })
+    expect(harness.connection.callsFor('prepare')).toHaveLength(1)
+
+    // The host self-heals the session back to the source checkout (for example
+    // the copy's directory disappeared); the promised copy must come back.
+    cwd = REPOSITORY
+    await act(async () => { harness.setWorkingDirectory(REPOSITORY) })
+    await waitFor(() => { expect(harness.connection.callsFor('prepare')).toHaveLength(2) })
+
+    expect(chipOf(view).getAttribute('data-phase')).toBe('ready')
+    expect(view.view.getByText(`Worktree: ${COPY.name}`)).toBeTruthy()
+  })
+
+  it('never creates for a session that stopped being blank during the check', async () => {
+    const harness = await setup()
+    let statusCalls = 0
+    let settle: ((result: ConnectionRpcResult<unknown>) => void) | undefined
+    harness.connection.setAnswer('status', () => {
+      statusCalls += 1
+      // The mount answer says the session already runs in a copy; the recheck
+      // the projection change causes is held open while the first prompt lands.
+      return statusCalls === 1
+        ? ok(supportedStatus({ sessionWorktree: COPY }))
+        : new Promise(resolve => { settle = resolve })
+    })
+    harness.connection.setAnswer('prepare', () => ok(prepareValue()))
+
+    const view = renderChip(harness)
+    await waitFor(() => { expect(view.view.getByText(`Worktree: ${COPY.name}`)).toBeTruthy() })
+
+    await act(async () => { harness.setWorkingDirectory(REPOSITORY) })
+    await waitFor(() => { expect(statusCalls).toBe(2) })
+    await act(async () => { harness.setSession({ blank: false }) })
+    expect(view.container.querySelector('.dsh-wt-chip')).toBeNull()
+
+    await act(async () => {
+      settle?.(ok(supportedStatus({ sessionWorktree: null, defaultEnabled: true })))
+      await Promise.resolve()
+    })
+    // The answer promised a copy to a session that is no longer blank: the
+    // switch lets it be, because only the hero may isolate a session.
+    expect(harness.connection.callsFor('prepare')).toHaveLength(0)
+  })
+})
+
 describe('default on', () => {
   it('creates the copy once and shows the ready face', async () => {
     const harness = await setup()
@@ -372,18 +485,6 @@ describe('turning isolation off before the first prompt', () => {
     expect(harness.connection.callsFor('release')).toHaveLength(1)
   })
 
-  it('a remembered off finishes a leave an earlier page never completed', async () => {
-    globalThis.localStorage.setItem(INTENT_STORAGE_KEY, JSON.stringify({ [REPOSITORY]: false }))
-    const harness = await setup({ resetStorage: false })
-    scriptStatus(harness, supportedStatus({ sessionWorktree: COPY }))
-    harness.connection.setAnswer('release', () => ok(releaseValue()))
-
-    const view = renderChip(harness)
-    await waitFor(() => { expect(view.view.getByText('Worktree off')).toBeTruthy() })
-    expect(harness.connection.callsFor('release')).toHaveLength(1)
-    expect(harness.blocks.reasonFor()).toBeUndefined()
-  })
-
   it('a refused release keeps the ready face and shows the reason', async () => {
     const harness = await setup()
     // The host refused the delete, so the copy is still the session's directory:
@@ -441,6 +542,26 @@ describe('the off face after a leave', () => {
     const chip = chipOf(view)
     expect(chip.getAttribute('data-phase')).toBe('off')
     expect(chip.getAttribute('data-hint')).toContain('cannot lock ref')
+  })
+
+  it('shows an inherited copy as left behind, not deleted, when another session owns it', async () => {
+    const harness = await setup()
+    scriptStatus(harness, supportedStatus({ sessionWorktree: COPY, defaultEnabled: false }))
+    harness.connection.setAnswer('release', () => ok(keptReleaseValue('not-owned', { error: null })))
+
+    const view = renderChip(harness)
+    await waitFor(() => { expect(view.view.getByText(`Worktree: ${COPY.name}`)).toBeTruthy() })
+    expect(switchOf(view).getAttribute('aria-checked')).toBe('true')
+
+    fireEvent.click(switchOf(view))
+    await waitFor(() => { expect(view.view.getByText('Worktree off')).toBeTruthy() })
+
+    const chip = chipOf(view)
+    expect(chip.getAttribute('data-phase')).toBe('off')
+    expect(chip.getAttribute('data-intent')).toBe('off')
+    expect(chip.getAttribute('data-kept')).toBe('not-owned')
+    expect(chip.getAttribute('data-hint')).toContain(en['chip.hint.keptNotOwned'].replace('{name}', COPY.name))
+    expect(storedIntent()).toEqual({ [REPOSITORY]: false })
   })
 
   it('leaves no kept text after a clean undo', async () => {
