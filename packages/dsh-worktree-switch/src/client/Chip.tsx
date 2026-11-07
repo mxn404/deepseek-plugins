@@ -81,12 +81,13 @@ export function chipHint(state: ToggleState, t: Translate): string {
         : t('chip.hint.ready', { branch: copy.branch, path: copy.path })]
       if (state.base?.kind === 'fallback') parts.push(t('chip.hint.baseFallback'))
       // The isolation default being off while this session runs in a copy is
-      // the inherited-copy state, not a failed leave: only an error means the
-      // leave itself did not happen.
+      // the inherited-copy state, not a failed leave: only an attempted leave
+      // that the host refused may claim it could not leave. A failed recheck
+      // also records an error, but it never tried to move the session.
       if (!state.intent) {
-        parts.push(state.error === null
-          ? t('chip.hint.isolationOff')
-          : t('chip.hint.intentOff', { name: state.worktree?.name ?? '' }))
+        parts.push(state.leaveFailed
+          ? t('chip.hint.intentOff', { name: state.worktree?.name ?? '' })
+          : t('chip.hint.isolationOff'))
       }
       if (state.sourceDirty > 0) parts.push(t('chip.hint.dirty', { count: state.sourceDirty }))
       if (state.error !== null) parts.push(state.error)

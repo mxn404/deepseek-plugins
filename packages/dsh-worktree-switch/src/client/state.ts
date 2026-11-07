@@ -73,6 +73,15 @@ export interface ToggleState {
   /** Readable failure for the failed face. */
   readonly error: string | null
   /**
+   * Whether the failure currently on screen came from an attempted leave.
+   *
+   * A refused release and a failed check both set {@link error}, but only the
+   * former tried to move the session, so only it may make the hover claim the
+   * switch failed to leave. Cleared whenever a check, a leave, or a create
+   * succeeds.
+   */
+  readonly leaveFailed: boolean
+  /**
    * The copy the last leave kept, with the reason.
    *
    * A leave that deleted its copy clears this; a leave that kept one fills it,
@@ -106,6 +115,7 @@ const INITIAL: ToggleState = {
   sourceDirty: 0,
   base: null,
   error: null,
+  leaveFailed: false,
   kept: null,
 }
 
@@ -470,6 +480,7 @@ class InternalBinding {
           phase: 'disabled',
           intent: status.defaultEnabled,
           error: null,
+          leaveFailed: false,
         })
         return
       }
@@ -497,6 +508,7 @@ class InternalBinding {
         sourceDirty: status.sourceDirty,
         base: sameCopy ? now.base : null,
         error: null,
+        leaveFailed: false,
         kept,
       }
       if (status.sessionWorktree !== null) {
@@ -561,6 +573,7 @@ class InternalBinding {
         sourceDirty: prepared.sourceDirty,
         base: prepared.state === 'created' ? prepared.base : null,
         error: null,
+        leaveFailed: false,
         kept: null,
       })
     } catch (error) {
@@ -613,6 +626,7 @@ class InternalBinding {
         worktree: null,
         base: null,
         error: null,
+        leaveFailed: false,
         kept,
       })
       // A copy the switch kept because it holds content is a leftover someone
@@ -639,6 +653,7 @@ class InternalBinding {
         phase: now.worktree === null ? 'off' : 'ready',
         intent: false,
         error: message,
+        leaveFailed: true,
         kept: null,
       })
       // A delete the host could not finish is exactly the silent "off" the

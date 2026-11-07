@@ -248,6 +248,13 @@ describe('following the working-directory projection', () => {
     expect(view.view.getByText(`Worktree: ${COPY.name}`)).toBeTruthy()
     expect(view.container.querySelector('.dsh-wt-retry')).toBeNull()
     expect(view.view.queryByText('Worktree failed')).toBeNull()
+
+    // The error is the failed check's; no leave was attempted, so the hover
+    // explains the isolation default instead of claiming it could not leave.
+    const hint = chip.getAttribute('data-hint') ?? ''
+    expect(hint).toContain('the status read timed out')
+    expect(hint).toContain(en['chip.hint.isolationOff'])
+    expect(hint).not.toContain(en['chip.hint.intentOff'].replace('{name}', COPY.name))
   })
 
   it('rebuilds a vanished copy exactly once while isolation is on', async () => {
@@ -553,6 +560,35 @@ describe('turning isolation off before the first prompt', () => {
     const hint = chipOf(view).getAttribute('data-hint')
     expect(hint).toContain('permission denied removing the checkout')
     expect(hint).toContain(en['chip.hint.intentOff'].replace('{name}', COPY.name))
+    expect(hint).not.toContain(en['chip.hint.isolationOff'])
+  })
+
+  it('forgets the failed leave once a later check succeeds', async () => {
+    const harness = await setup()
+    scriptStatus(harness, supportedStatus({ sessionWorktree: COPY, defaultEnabled: false }))
+    harness.connection.setAnswer('release', () => fail('permission denied removing the checkout'))
+
+    const view = renderChip(harness)
+    await waitFor(() => { expect(view.view.getByText(`Worktree: ${COPY.name}`)).toBeTruthy() })
+
+    fireEvent.click(switchOf(view))
+    await waitFor(() => {
+      expect(chipOf(view).getAttribute('data-hint'))
+        .toContain(en['chip.hint.intentOff'].replace('{name}', COPY.name))
+    })
+
+    // A later check succeeds (the projection moved): the refused leave's error
+    // and its "could not leave" sentence are both gone, even though this
+    // inherited copy still leaves the isolation default off.
+    await act(async () => { harness.setWorkingDirectory(COPY.path) })
+    await waitFor(() => {
+      expect(chipOf(view).getAttribute('data-hint'))
+        .not.toContain('permission denied removing the checkout')
+    })
+
+    const hint = chipOf(view).getAttribute('data-hint') ?? ''
+    expect(hint).toContain(en['chip.hint.isolationOff'])
+    expect(hint).not.toContain(en['chip.hint.intentOff'].replace('{name}', COPY.name))
   })
 })
 
