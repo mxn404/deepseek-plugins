@@ -14,6 +14,7 @@ import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
 import type {} from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
+import { isKeptLeftover } from '../types.ts'
 import type {
   CopyRef, KeptReason, ListValue, OrphanBranch, PrepareBase, PrepareValue, ReleaseValue, ScopeValue,
   StatusValue, WorktreeItem,
@@ -36,7 +37,13 @@ declare module '@deepseek-ai/dsh-session-projection/types' {
 /** Which of the switch's six faces is showing. */
 export type TogglePhase = 'checking' | 'off' | 'creating' | 'reverting' | 'ready' | 'failed' | 'disabled'
 
-/** A copy the switch left on disk when it was turned off, and why it stayed. */
+/**
+ * A copy a leave left on disk, and why it stayed.
+ *
+ * This is the wire's kept-copy face, not the domain's 保留副本: only a `dirty`
+ * copy is a leftover someone has to clean up. A `not-owned` copy is somebody
+ * else's and is only explained in the switch's hover; see {@link isKeptLeftover}.
+ */
 export interface KeptCopy {
   /** The copy that is still there. */
   readonly worktree: CopyRef
@@ -50,7 +57,10 @@ export interface KeptCopy {
 export interface ToggleState {
   /** The face to render. */
   readonly phase: TogglePhase
-  /** The switch position: whether new sessions in this project isolate. */
+  /**
+   * The project's isolation default: whether a new session with no copy of its
+   * own gets one. It is not the switch position — see {@link switchPosition}.
+   */
   readonly intent: boolean
   /** The copy this session runs in, once there is one. */
   readonly worktree: CopyRef | null
@@ -63,12 +73,37 @@ export interface ToggleState {
   /** Readable failure for the failed face. */
   readonly error: string | null
   /**
+   * Whether the failure currently on screen came from an attempted leave.
+   *
+   * A refused release and a failed check both set {@link error}, but only the
+   * former tried to move the session, so only it may make the hover claim the
+   * switch failed to leave. Cleared whenever a check, a leave, or a create
+   * succeeds.
+   */
+  readonly leaveFailed: boolean
+  /**
    * The copy the last leave kept, with the reason.
    *
    * A leave that deleted its copy clears this; a leave that kept one fills it,
    * so "off" never claims a clean undo it did not get.
    */
   readonly kept: KeptCopy | null
+}
+
+/**
+ * The switch position the page shows: on exactly while the session runs in a
+ * copy.
+ *
+ * The position is derived, not stored: `ready` means the host confirmed a copy
+ * for this session, and every other face falls back to the project's isolation
+ * default. Keeping the two apart is what lets `/new` inherit a copy in a
+ * project whose default is off without the control claiming the session runs
+ * in the source checkout.
+ * @param state - the current switch state.
+ * @returns whether the switch reads as on.
+ */
+export function switchPosition(state: ToggleState): boolean {
+  return state.phase === 'ready' ? true : state.intent
 }
 
 /** The initial state: nothing is known until the host answers. */
@@ -80,6 +115,7 @@ const INITIAL: ToggleState = {
   sourceDirty: 0,
   base: null,
   error: null,
+  leaveFailed: false,
   kept: null,
 }
 
@@ -89,6 +125,10 @@ export interface ChipBinding {
   readonly hooks: { readonly toggle: SnapshotStore<ToggleState> }
   /** Ask the host what this session's project can do; idempotent. */
   ensure(): void
+  /** Re-run the whole check after this session's working directory moved. */
+  recheck(): void
+  /** Whether this session may still get a copy: only the blank hero may. */
+  follow(active: boolean): void
   /** Move the switch, creating a copy when it moves on and none exists. */
   setIntent(next: boolean): void
   /** Try again after a failure, with the switch on. */
@@ -115,8 +155,6 @@ export interface NoticeState {
   readonly kind: NoticeKind
   /** The copy a leave kept; null for a failed leave. */
   readonly worktree: CopyRef | null
-  /** Why the copy was kept; null for a failed leave. */
-  readonly reason: KeptReason | null
   /** Host-local detail: the change count or the failure message. */
   readonly message: string | null
 }
@@ -354,6 +392,16 @@ class InternalBinding {
   private creating = false
   /** The release in flight, shared by callers that ask to leave at once. */
   private releasing: Promise<void> | null = null
+  /** A check is in flight; a recheck that arrives meanwhile must not double it. */
+  private checking = false
+  /** A recheck arrived while one was running: run exactly one more afterwards. */
+  private checkAgain = false
+  /**
+   * Whether the chip is still in the blank-session hero. A session that has
+   * history must never be moved, even by a check that was in flight when its
+   * first prompt landed.
+   */
+  private following = false
 
   readonly face: ChipBinding
 
@@ -372,6 +420,8 @@ class InternalBinding {
     this.face = {
       hooks: { toggle: this.store },
       ensure: () => { this.ensure() },
+      recheck: () => { this.recheck() },
+      follow: active => { this.following = active },
       setIntent: next => { this.setIntent(next) },
       retry: () => { this.retry() },
       block: reason => { this.block(reason) },
@@ -382,7 +432,42 @@ class InternalBinding {
   ensure(): void {
     if (this.started) return
     this.started = true
-    void this.check()
+    this.run()
+  }
+
+  /**
+   * Re-run the whole check after the session's working directory moved.
+   *
+   * The working-directory projection is the only announcement of a `/new`
+   * inheritance, a host self-heal, or a completed leave, so the switch follows
+   * it with the same round trip as the first check. That allows one more
+   * `prepare` — only for a session the host reports without a copy while the
+   * isolation default is on. A create or leave in flight owns the switch: the
+   * change it caused is already covered by its own answer, and a second
+   * prepare/release must never race it.
+   */
+  recheck(): void {
+    if (this.creating || this.releasing !== null) return
+    if (!this.started) {
+      this.ensure()
+      return
+    }
+    this.run()
+  }
+
+  /** Run one check, coalescing a recheck that arrives while it is in flight. */
+  private run(): void {
+    if (this.checking) {
+      this.checkAgain = true
+      return
+    }
+    this.checking = true
+    void this.check().finally(() => {
+      this.checking = false
+      if (!this.checkAgain) return
+      this.checkAgain = false
+      this.recheck()
+    })
   }
 
   /** Ask the host for the project's facts and act on the remembered choice. */
@@ -395,26 +480,42 @@ class InternalBinding {
           phase: 'disabled',
           intent: status.defaultEnabled,
           error: null,
+          leaveFailed: false,
         })
         return
       }
       this.project = status.repositoryRoot
+      const now = this.store.getSnapshot()
       const intent = readIntent(status.repositoryRoot) ?? status.defaultEnabled
+      // A recheck that lands on the same copy keeps where that copy's base came
+      // from (the projection change was caused by the page's own prepare); one
+      // that lands off keeps the copy a leave just kept, so the hover can still
+      // explain why it is on disk.
+      const sameCopy = now.worktree !== null
+        && status.sessionWorktree !== null
+        && now.worktree.path === status.sessionWorktree.path
+      const kept = !intent
+        && now.phase === 'off'
+        && now.kept !== null
+        && status.sessionWorktree === null
+        ? now.kept
+        : null
       const base: ToggleState = {
         phase: 'off',
         intent,
         worktree: status.sessionWorktree,
         repositoryRoot: status.repositoryRoot,
         sourceDirty: status.sourceDirty,
-        base: null,
+        base: sameCopy ? now.base : null,
         error: null,
-        kept: null,
+        leaveFailed: false,
+        kept,
       }
       if (status.sessionWorktree !== null) {
+        // A session already in a copy stays there: the project default decides
+        // only whether a new session gets one, never where an existing session
+        // runs. `/new` inherits the copy, so the switch must show it, not undo it.
         this.store.set({ ...base, phase: 'ready' })
-        // The remembered position is "off", so this session should not be in a
-        // copy: finish a leave an earlier page (or a failed undo) left behind.
-        if (!intent) void this.release()
         return
       }
       if (!intent) {
@@ -425,13 +526,26 @@ class InternalBinding {
       await this.create()
     } catch (error) {
       if (this.signal.aborted) return
-      this.store.set({ ...this.store.getSnapshot(), phase: 'failed', error: messageOf(error) })
+      const now = this.store.getSnapshot()
+      // A session that is already in a copy must not change face because a
+      // recheck failed: the copy is still there, and "failed" would derive the
+      // isolation default as the position (an inherited copy could then read
+      // off) and claim the session is back in the project directory. Only the
+      // ready hover's error line may change; a session with no known copy is
+      // the one case that really failed to find out where it runs.
+      if (now.worktree !== null) {
+        this.store.set({ ...now, error: messageOf(error) })
+        return
+      }
+      this.store.set({ ...now, phase: 'failed', error: messageOf(error) })
     }
   }
 
   /** Create the copy for a session the switch says should have one. */
   private async create(): Promise<void> {
-    if (this.creating) return
+    // Only the blank hero may isolate a session: a check that was in flight
+    // when the first prompt landed must not create a copy afterwards.
+    if (!this.following || this.creating) return
     const before = this.store.getSnapshot()
     if (before.repositoryRoot === null || !before.intent) return
     this.creating = true
@@ -459,6 +573,7 @@ class InternalBinding {
         sourceDirty: prepared.sourceDirty,
         base: prepared.state === 'created' ? prepared.base : null,
         error: null,
+        leaveFailed: false,
         kept: null,
       })
     } catch (error) {
@@ -511,15 +626,18 @@ class InternalBinding {
         worktree: null,
         base: null,
         error: null,
+        leaveFailed: false,
         kept,
       })
-      // A kept copy is a leftover someone has to clean up: tell them once, and
-      // let the sidebar count learn about it without waiting for a panel open.
-      if (kept !== null) {
+      // A copy the switch kept because it holds content is a leftover someone
+      // has to clean up: tell them once, and let the sidebar count learn about
+      // it without waiting for a panel open. A copy this session never owned is
+      // not a leftover — the switch never deletes it, so leaving it behind is
+      // the ordinary path and only the hover explains it.
+      if (kept !== null && isKeptLeftover(kept.reason)) {
         this.notices.raise({
           kind: 'kept',
           worktree: kept.worktree,
-          reason: kept.reason,
           message: kept.error ?? null,
         })
         this.onLeftover()
@@ -535,16 +653,17 @@ class InternalBinding {
         phase: now.worktree === null ? 'off' : 'ready',
         intent: false,
         error: message,
+        leaveFailed: true,
         kept: null,
       })
       // A delete the host could not finish is exactly the silent "off" the
       // ADR forbids, so the failure gets the same one-shot notice as a kept copy.
-      this.notices.raise({ kind: 'failed', worktree: now.worktree, reason: null, message })
+      this.notices.raise({ kind: 'failed', worktree: now.worktree, message })
       // Whatever is left is a cleanup item: recount it, and ask the host where
       // the session actually is now (a refused branch delete still removed the
       // checkout and moved the session back).
       this.onLeftover()
-      void this.recheck()
+      void this.reread()
     }
   }
 
@@ -556,7 +675,7 @@ class InternalBinding {
    * asks once which directory the host now records and shows that; it never
    * creates, releases, or retries anything.
    */
-  private async recheck(): Promise<void> {
+  private async reread(): Promise<void> {
     try {
       const status = await callHost<StatusValue>(this.ctx, 'status', { sessionId: this.sessionId }, this.signal)
       if (this.signal.aborted || !status.supported) return
@@ -580,7 +699,11 @@ class InternalBinding {
     if (state.phase === 'checking' || state.phase === 'disabled' || state.phase === 'reverting') return
     if (this.project !== null) writeIntent(this.project, next)
     if (!next) {
-      if (state.intent === next) return
+      // A leave is requested whenever the switch is on, even if the project's
+      // isolation default is already off (`/new` inherited this copy): the
+      // click is about where this session runs, not about the preference.
+      const alreadyOff = state.phase === 'off' && state.worktree === null && !state.intent
+      if (alreadyOff) return
       this.store.set({ ...state, intent: false, error: null, kept: null })
       void this.release()
       return
@@ -619,7 +742,11 @@ export interface PanelGroup {
   readonly items: readonly WorktreeItem[]
   /** Generated-name branches no copy checks out, newest first. */
   readonly orphans: readonly OrphanBranch[]
-  /** Kept copies this host instance left on disk and that still exist here. */
+  /**
+   * Kept copies this host instance left on disk that have content (or whose
+   * deletion failed), and that still exist here. A copy left only because
+   * another session owns it is not a kept copy and is not counted.
+   */
   readonly keptCopies: number
   /** Per-project failure text, when reading it failed. */
   readonly error: string | null

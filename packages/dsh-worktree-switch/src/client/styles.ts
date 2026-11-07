@@ -29,7 +29,7 @@ const CSS = `
   width: 6px; height: 6px; border-radius: 999px;
   background: color-mix(in oklab, currentColor 40%, transparent);
 }
-.dsh-wt-chip[data-intent="on"] .dsh-wt-dot { background: #2da44e; }
+.dsh-wt-chip[data-position="on"] .dsh-wt-dot { background: #2da44e; }
 .dsh-wt-chip[data-phase="failed"] .dsh-wt-dot { background: #e5534b; }
 .dsh-wt-chip[data-phase="creating"] .dsh-wt-dot { background: #bf8700; }
 .dsh-wt-label { max-width: 240px; overflow: hidden; text-overflow: ellipsis; }

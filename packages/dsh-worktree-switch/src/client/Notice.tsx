@@ -32,12 +32,10 @@ type Translate = (key: WorktreeToggleKey, params?: Record<string, unknown>) => s
  */
 export function noticeText(notice: NoticeState, t: Translate): string {
   if (notice.kind === 'failed') return t('notice.failed', { message: notice.message ?? '' })
-  const name = notice.worktree?.name ?? ''
-  // The reason sentence is localized; the host's English detail (a change
-  // count) is not spliced into it, so the banner stays one language.
-  return notice.reason === 'dirty'
-    ? t('notice.keptDirty', { name })
-    : t('notice.keptNotOwned', { name })
+  // Only content is an event the frame reports; a copy this session did not
+  // create is left on disk as the ordinary path, explained in the switch's
+  // hover instead of a banner.
+  return t('notice.keptDirty', { name: notice.worktree?.name ?? '' })
 }
 
 /**

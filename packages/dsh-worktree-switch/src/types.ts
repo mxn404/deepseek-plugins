@@ -109,6 +109,22 @@ export interface SessionScope {
  */
 export type KeptReason = 'dirty' | 'not-owned'
 
+/**
+ * Whether a leave that kept a copy left a 保留副本 behind.
+ *
+ * Not every copy a leave leaves on disk is a leftover: only `dirty` is. A copy
+ * kept because this session never owned it (`not-owned`) is the ordinary result
+ * of leaving someone else's copy — explained in the switch's hover, never
+ * reported as cleanup. The host registers a kept copy for the panel count and
+ * the browser half raises the one-shot notice only when this returns true, so
+ * the two halves cannot drift apart on the rule.
+ * @param reason - why the host kept the copy, or null when it kept nothing.
+ * @returns whether the kept copy is a leftover this host has to clean up.
+ */
+export function isKeptLeftover(reason: KeptReason | null): boolean {
+  return reason === 'dirty'
+}
+
 /** The result of turning the switch off before the first prompt. */
 export type ReleaseValue = {
   /** The checkout the session now runs in. */
@@ -181,9 +197,11 @@ export type ListValue =
     /** Generated-name branches with no checkout, oldest last. */
     readonly orphans: readonly OrphanBranch[]
     /**
-     * Kept copies this host instance left on disk and that still exist here.
-     * A host restart forgets them; the panel then counts leftovers only, which
-     * is the honest floor.
+     * Kept copies this host instance left on disk that have content (or whose
+     * deletion failed), and that still exist here. A copy left only because
+     * another session owns it is not a kept copy and is not counted: the panel
+     * and the sidebar are for this host's own leftovers. A host restart forgets
+     * the set; the panel then counts leftovers only, which is the honest floor.
      */
     readonly keptCopies: number
   }

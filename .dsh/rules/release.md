@@ -6,8 +6,9 @@ README 里的安装/行为说明）改动合并进 main 之后，**立刻走完�
 
 ## 1. 合并前
 
-- 必须带 changeset（`.changeset/<slug>.md`）：修 bug / 行为微调用 `patch`，新功能或新配置用
-  `minor`。不要手改 `package.json` 版本号绕过 changeset。
+- 必须带 changeset（`.changeset/<slug>.md`）。版本位默认只 bump `patch`，`minor` / `major`
+  只在当次明确要求时用；完整规则见 [versioning.md](./versioning.md)。不要手改
+  `package.json` 版本号绕过 changeset。
 - `pnpm check` 全绿。本机沙箱里 pnpm store 在工作区外不可写时，可用主 checkout 的
   `node_modules` 跑单包 `tsc` / `vitest` / `tsdown`，临时的 symlink 与缓存目录不要提交。
 - squash 合并会让工作分支与 main 分叉：再开 PR 前先 `git fetch origin && git rebase origin/main`，

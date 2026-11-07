@@ -19,7 +19,8 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
 
 import { cleanup, fireEvent, waitFor } from '@testing-library/react'
 import {
-  copyRef, fail, keptReleaseValue, ok, prepareValue, releaseValue, ROOT_PANEL_ID, setup, supportedStatus,
+  copyRef, fail, keptReleaseValue, listValue, ok, prepareValue, releaseValue, REPOSITORY, ROOT_PANEL_ID, setup,
+  supportedStatus,
 } from './client-harness.ts'
 import type { ClientHarness, ClientSlotView } from './client-harness.ts'
 import { en } from '../src/client/locales.ts'
@@ -91,22 +92,27 @@ describe('a leave that kept a copy', () => {
     await waitFor(() => { expect(noticeOf(overlay)).toBeNull() })
   })
 
-  it('explains an unprovable owner differently', async () => {
-    const harness = await setup()
-    harness.connection.setAnswer('status', () => ok(supportedStatus()))
-    harness.connection.setAnswer('prepare', () => ok(prepareValue()))
+  it('says nothing and counts nothing when the copy belongs to another session', async () => {
+    const harness = await setup({ workspaces: [{ path: REPOSITORY, title: 'repo' }] })
+    // The blank session inherited a copy this session did not create; leaving
+    // it is ordinary, not a leftover to clean up.
+    harness.connection.setAnswer('status', () => ok(supportedStatus({
+      sessionWorktree: COPY,
+      defaultEnabled: false,
+    })))
+    harness.connection.setAnswer('list', () => ok(listValue()))
     harness.connection.setAnswer('release', () => ok(keptReleaseValue('not-owned', { error: null })))
 
     const overlay = renderOverlay(harness)
     const chip = renderChip(harness)
     await waitFor(() => { expect(chip.view.getByText(`Worktree: ${COPY.name}`)).toBeTruthy() })
-    await turnOff(chip)
-    await waitFor(() => { expect(noticeOf(overlay)).not.toBeNull() })
+    await waitFor(() => { expect(harness.connection.callsFor('list')).toHaveLength(1) })
 
-    const notice = noticeOf(overlay)!
-    expect(notice.getAttribute('data-kind')).toBe('kept')
-    expect(notice.textContent).toContain(en['notice.keptNotOwned'].replace('{name}', COPY.name))
-    expect(notice.textContent).not.toContain('1 file with uncommitted changes')
+    await turnOff(chip)
+    expect(noticeOf(overlay)).toBeNull()
+    // No recount: the cleanup count the sidebar shows must not move.
+    expect(harness.connection.callsFor('list')).toHaveLength(1)
+    expect(chip.container.querySelector('.dsh-wt-chip')!.getAttribute('data-kept')).toBe('not-owned')
   })
 
   it('can be dismissed by hand', async () => {
