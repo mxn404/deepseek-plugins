@@ -54,14 +54,30 @@ export function chipLabel(state: ToggleState, t: Translate): string {
 export function chipHint(state: ToggleState, t: Translate): string {
   switch (state.phase) {
     case 'checking': return t('chip.hint.checking')
-    case 'off': return t('chip.hint.off')
+    case 'off': {
+      const parts = [t('chip.hint.off')]
+      // Off is the honest face for a leave that kept the copy; the reason has
+      // to be readable here, because the notice can be dismissed and the panel
+      // is a different page.
+      if (state.kept !== null) {
+        // The reason sentence is localized; the host's English detail (a change
+        // count) is not spliced into it, so the hover stays one language.
+        parts.push(state.kept.reason === 'dirty'
+          ? t('chip.hint.keptDirty', { name: state.kept.worktree.name })
+          : t('chip.hint.keptNotOwned', { name: state.kept.worktree.name }))
+      }
+      if (state.error !== null) parts.push(state.error)
+      return parts.join(' ')
+    }
     case 'creating': return t('chip.hint.creating')
     case 'reverting': return t('chip.hint.reverting')
     case 'ready': {
-      const parts = [t('chip.hint.ready', {
-        branch: state.worktree?.branch ?? '',
-        path: state.worktree?.path ?? '',
-      })]
+      const copy = state.worktree
+      // A detached copy has no branch; naming its directory as one would be a
+      // lie the player cannot check.
+      const parts = [copy === null || copy.branch === null
+        ? t('chip.hint.detached', { path: copy?.path ?? '' })
+        : t('chip.hint.ready', { branch: copy.branch, path: copy.path })]
       if (state.base?.kind === 'fallback') parts.push(t('chip.hint.baseFallback'))
       if (!state.intent) parts.push(t('chip.hint.intentOff', { name: state.worktree?.name ?? '' }))
       if (state.sourceDirty > 0) parts.push(t('chip.hint.dirty', { count: state.sourceDirty }))
@@ -125,6 +141,7 @@ export function WorktreeChip(props: WorktreeChipProps): ReactElement | null {
       className="dsh-wt-chip"
       data-phase={state.phase}
       data-intent={state.intent ? 'on' : 'off'}
+      data-kept={state.kept === null ? 'false' : state.kept.reason}
       data-hint={hint}
     >
       <Tooltip label={hint} side="top" delayMs={200}>

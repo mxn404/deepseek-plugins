@@ -23,8 +23,8 @@ import { resolveSlotLabel } from '@deepseek-ai/dsh-client-ui-slots'
 import { en, zh } from '../src/client/locales.ts'
 import { INTENT_STORAGE_KEY } from '../src/client/intent.ts'
 import {
-  copyRef, fail, ok, prepareValue, releaseValue, REPOSITORY, SESSION, setup, supportedStatus,
-  unsupportedStatus,
+  copyRef, detachedRef, fail, keptReleaseValue, ok, prepareValue, releaseValue, REPOSITORY, SESSION, setup,
+  supportedStatus, unsupportedStatus,
 } from './client-harness.ts'
 import type { ClientHarness, ClientSlotView } from './client-harness.ts'
 import type { StatusValue } from '../src/types.ts'
@@ -84,10 +84,22 @@ describe('switch registration', () => {
     expect(sidebar[0]!.options.order).toBe(30)
     expect(resolveSlotLabel(sidebar[0]!.options.label)).toBe('Worktrees')
 
+    const badge = harness.slots.entries('conversation.session.header.utilities')
+    expect(badge).toHaveLength(1)
+    expect(badge[0]!.options.id).toBe('dsh-worktree-switch.badge')
+    expect(badge[0]!.locale).toBe('worktreeToggle')
+
+    const notice = harness.slots.entries('shell.overlay')
+    expect(notice).toHaveLength(1)
+    expect(notice[0]!.options.id).toBe('dsh-worktree-switch.notice')
+    expect(notice[0]!.locale).toBe('worktreeToggle')
+
     await harness.unloadPlugin()
     expect(harness.slots.entries('conversation.input.left')).toHaveLength(0)
     expect(harness.slots.entries('main')).toHaveLength(0)
     expect(harness.slots.entries('sidebar.panellist')).toHaveLength(0)
+    expect(harness.slots.entries('conversation.session.header.utilities')).toHaveLength(0)
+    expect(harness.slots.entries('shell.overlay')).toHaveLength(0)
   })
 })
 
@@ -374,7 +386,9 @@ describe('turning isolation off before the first prompt', () => {
 
   it('a refused release keeps the ready face and shows the reason', async () => {
     const harness = await setup()
-    scriptStatus(harness, supportedStatus())
+    // The host refused the delete, so the copy is still the session's directory:
+    // the status re-read after the failure must report it.
+    scriptStatus(harness, supportedStatus({ sessionWorktree: COPY }))
     harness.connection.setAnswer('prepare', () => ok(prepareValue()))
     harness.connection.setAnswer('release', () => fail('permission denied removing the checkout'))
 
@@ -386,6 +400,64 @@ describe('turning isolation off before the first prompt', () => {
     const hint = chipOf(view).getAttribute('data-hint')
     expect(hint).toContain('permission denied removing the checkout')
     expect(hint).toContain(en['chip.hint.intentOff'].replace('{name}', COPY.name))
+  })
+})
+
+describe('the off face after a leave', () => {
+  it('says the copy was kept, and why, instead of pretending the undo was clean', async () => {
+    const harness = await setup()
+    scriptStatus(harness, supportedStatus())
+    harness.connection.setAnswer('prepare', () => ok(prepareValue()))
+    harness.connection.setAnswer('release', () => ok(keptReleaseValue('dirty')))
+
+    const view = renderChip(harness)
+    await waitFor(() => { expect(view.view.getByText(`Worktree: ${COPY.name}`)).toBeTruthy() })
+
+    fireEvent.click(switchOf(view))
+    await waitFor(() => { expect(view.view.getByText('Worktree off')).toBeTruthy() })
+
+    const chip = chipOf(view)
+    expect(chip.getAttribute('data-phase')).toBe('off')
+    expect(chip.getAttribute('data-kept')).toBe('dirty')
+    const hint = chip.getAttribute('data-hint') ?? ''
+    expect(hint).toContain(en['chip.hint.keptDirty'].replace('{name}', COPY.name))
+    // The host's English detail stays out of the localized sentence.
+    expect(hint).not.toContain('1 file with uncommitted changes')
+  })
+
+  it('re-reads the host after a refused release, so a copy that is gone does not stay on screen', async () => {
+    const harness = await setup()
+    scriptStatus(harness, supportedStatus())
+    harness.connection.setAnswer('prepare', () => ok(prepareValue()))
+    // The checkout was removed before the branch delete was refused: the next
+    // status must say the session is back in the project directory.
+    harness.connection.setAnswer('release', () => fail('cannot lock ref'))
+
+    const view = renderChip(harness)
+    await waitFor(() => { expect(view.view.getByText(`Worktree: ${COPY.name}`)).toBeTruthy() })
+
+    fireEvent.click(switchOf(view))
+    await waitFor(() => { expect(view.view.getByText('Worktree off')).toBeTruthy() })
+    const chip = chipOf(view)
+    expect(chip.getAttribute('data-phase')).toBe('off')
+    expect(chip.getAttribute('data-hint')).toContain('cannot lock ref')
+  })
+
+  it('leaves no kept text after a clean undo', async () => {
+    const harness = await setup()
+    scriptStatus(harness, supportedStatus())
+    harness.connection.setAnswer('prepare', () => ok(prepareValue()))
+    harness.connection.setAnswer('release', () => ok(releaseValue()))
+
+    const view = renderChip(harness)
+    await waitFor(() => { expect(view.view.getByText(`Worktree: ${COPY.name}`)).toBeTruthy() })
+
+    fireEvent.click(switchOf(view))
+    await waitFor(() => { expect(view.view.getByText('Worktree off')).toBeTruthy() })
+
+    const chip = chipOf(view)
+    expect(chip.getAttribute('data-kept')).toBe('false')
+    expect(chip.getAttribute('data-hint')).toBe(en['chip.hint.off'])
   })
 })
 
@@ -424,5 +496,19 @@ describe('the ready face reports a degraded base', () => {
     await waitFor(() => { expect(view.view.getByText(`Worktree：${COPY.name}`)).toBeTruthy() })
 
     expect(chipOf(view).getAttribute('data-hint')).toContain(zh['chip.hint.baseFallback'])
+  })
+})
+
+describe('a detached copy as the session copy', () => {
+  it('says it has no branch instead of naming the directory', async () => {
+    const harness = await setup()
+    scriptStatus(harness, supportedStatus({ sessionWorktree: detachedRef() }))
+
+    const view = renderChip(harness)
+    await waitFor(() => { expect(view.view.getByText(`Worktree: ${detachedRef().name}`)).toBeTruthy() })
+
+    const hint = chipOf(view).getAttribute('data-hint') ?? ''
+    expect(hint).toContain(en['chip.hint.detached'].replace('{path}', detachedRef().path))
+    expect(hint).not.toContain('Branch brisk-fern-1a2b')
   })
 })

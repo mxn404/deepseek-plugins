@@ -38,6 +38,21 @@ export function worktreeName(random: () => number = Math.random): string {
 /** A pool entry name is exactly one path segment, as `git worktree` names it. */
 const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 
+/** The shape this plugin generates: two lowercase words and four hex digits. */
+const GENERATED_PATTERN = /^[a-z]+-[a-z]+-[0-9a-f]{4}$/
+
+/**
+ * Whether a branch name looks like one this plugin generated.
+ *
+ * Leftover-branch cleanup only offers names of this shape: an ordinary feature
+ * branch is never a candidate, even when no checkout holds it.
+ * @param value - candidate branch name.
+ * @returns true for the generated-name format.
+ */
+export function isGeneratedName(value: string): boolean {
+  return GENERATED_PATTERN.test(value)
+}
+
 /**
  * Validate a worktree name received from the browser before it reaches Git.
  * @param value - candidate name.

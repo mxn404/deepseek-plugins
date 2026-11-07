@@ -11,16 +11,34 @@
 （见「创建基点」）。语义基线与有意偏离见
 [ADR-0005](../../docs/adr/0005-worktree-base-ref-deviates-from-claude-code.md)。
 
+「关掉」现在只做**撤销**，不叫回收：只有开关为这条会话创建、没有产生提交、也没有未提交
+改动的副本，才会在离开时被删掉（检出与分支一起）；有内容的、归属不明的副本一律保留，并
+在界面上说明原因。归属记在副本自己的 Git admin dir 里，宿主重启后仍然可证；会话头部常驻
+`⎇ 分支名` badge，面板新增「遗留分支」分组。取舍见
+[ADR-0006](../../docs/adr/0006-worktree-leave-is-undo-not-reclaim.md)。
+
 ## 它做什么
 
 - **开关**（`conversation.input.left` 槽，只在空白新会话的 hero 上出现）：显示本会话
   当前的副本状态——检查中 / 关闭 / 创建中 / 离开中 / 就绪（显示名字）/ 失败（显示原因 +
   重试）/ 不可用（项目不是 Git 仓库）。开关位置本身记的是"这个项目的新会话要不要隔离"。
 - **创建**发生在开关打开的那一刻，早于第一条消息；**关闭**发生在第一条消息之前时，
-  会话被切回项目目录，开关在这次打开中建的那份干净副本被删除（脏副本或开关之前就存在
-  的副本留在池里，交给面板处理）。副本默认从创建前刚拉取到的 `origin/<默认分支>` 起；
+  会话被切回项目目录；只有开关为这条会话创建、仍在创建基点、也没有未提交改动的副本会被
+  撤销（检出和分支一起删）。有提交、有改动、或归属不明的副本留在池里，开关的 hover 带上
+  保留原因，界面顶部给一次性提示并提供「打开面板」。副本默认从创建前刚拉取到的
+  `origin/<默认分支>` 起；
   `baseRef: 'head'` 或远端取不到时回退为本地 `HEAD`（见「创建基点」）。副本名 = 分支名 = 池内
   目录名，形如 `quiet-harbor-3fa9`，由插件生成，短且唯一。
+- **归属记在副本里**：创建成功后，插件往该副本自己的 Git admin dir
+  （`.git/worktrees/<名字>/dsh-worktree-switch.json`）写一条
+  `{ sessionId, createdAt, baseCommit }`。它随副本删除自动消失，不进工作区、不产生未跟踪
+  文件，宿主重启后仍然读得到。升级前就存在的副本没有标记，一律按「归属不明」保留：不补写、
+  不猜。副本被手工改成 detached 时，撤销只移除检出，永不删任何分支。
+- **会话头部 badge**：非空白会话的头部常驻 `⎇ 分支名`
+  （`conversation.session.header.utilities`）。hover 给副本绝对路径、仓库根与副本内未提交
+  数；它订阅会话当前工作目录的变化，`cd` 出去就消失，副本被建出来也会自己出现。点击打开
+  Worktrees 面板并高亮当前副本。空白 hero 与面板页不显示：那两处分别由开关和面板本身表达
+  同一件事。
 - **创建失败不回落**：提示词不发送，错误就地显示。从检查开始、到副本就绪之前、离开副本
   的过程中（或失败之后），开关通过 `ctx.conversation.blocks` 把该会话的输入框置为"暂停
   发送"；重试成功、关掉开关（确认不要隔离）或副本就绪时才解除。关掉开关是明确的退出
@@ -36,7 +54,17 @@
   `guardSourceCheckout: false` 可关掉。拦下的是 git，主检出里的普通写入仍然由沙箱放行。
 - **面板**（侧边栏条目 + 自己的页面）：按项目列出该仓库的所有 linked worktree（包括
   手工 `git worktree add` 出来的），含名字、分支、路径、创建时间和未提交改动数；丢弃
-  需要第二次确认，且**有未提交改动时拒绝丢弃**并说明原因。丢弃会删掉检出目录和分支。
+  需要第二次确认，且**有未提交改动时拒绝丢弃**并说明原因。目录被手工删掉、Git 注册还在
+  的副本标成「目录已丢失」，走同一套丢弃（先删分支、再 `worktree prune`，删不掉就报错而
+  不悄悄 prune）。detached 副本只展示，丢弃只移除检出、永不删分支。
+- **遗留分支**：每份副本之外，面板单独成组列出「名字符合生成格式（`<词>-<词>-<4位hex>`）、
+  但已没有任何 checkout」的分支，含提交数、最近提交 subject 与时间；删除需要第二次确认，
+  且只删分支。普通 feature 分支、以及仍被 checkout 的分支永远不会出现在这一组。
+- **当前副本**：面板按会话快照里当前主视图的那条会话推导「我在副本里」，给它高亮；不新增
+  宿主事件。侧边栏入口在有东西要清理时显示计数。
+- **计数口径**：入口计数 = 遗留分支数 + 本次宿主生命周期内被保留的副本数（含删除失败后
+  留在磁盘上的那一份）。宿主重启后后者不可知，计数退化为只数遗留分支——这是有意说出来的
+  诚实下限，不是 bug。
 - **会话身份不变**：会话仍然建在源项目的工作区里，起始目录不变，插件只改会话的工作
   目录（一条持久化事件，重开会话仍然生效）。
 
@@ -62,12 +90,15 @@ dsh --profile web --dump-config    # 应能看到 "# == dsh-worktree-switch" 和
 2. 新建会话（hero 屏幕）：输入框工具行最左侧出现 Worktree 开关；默认打开的项会先显示
    "检查中"，随即"正在创建"，然后显示这条会话的副本名。
 3. 按回车发消息：助手的工作目录已经是 `<项目根>/.dsh/worktrees/<名字>`，源仓库的
-   未提交内容留在原地。
-4. 侧边栏出现 **Worktree** 入口：打开后按项目列出磁盘上的副本，含创建时间与未提交改动。
+   未提交内容留在原地；会话头部出现常驻的 `⎇ 分支名`，hover 能核对路径、仓库根和未提交数。
+4. 侧边栏出现 **Worktree** 入口：打开后按项目列出磁盘上的副本与遗留分支，含创建时间、
+   未提交改动、提交数等；当前会话所在的副本高亮。有东西要清理时入口会带计数。
 5. 想丢弃一份副本：点两次 Discard（第二次是确认）；有未提交改动时按钮禁用并说明原因。
-6. 开关只在空白会话上出现：发第一条消息之前关掉，会把会话切回项目目录并删掉刚建的空
-   副本；发过消息之后开关消失，副本留在池里，由面板丢弃。拨开关同时记住这个项目下次
-   的默认位置。
+   遗留分支同样点两次删除；目录已丢失的副本行标「目录已丢失」，走同一套丢弃。
+6. 开关只在空白会话上出现：发第一条消息之前关掉，会把会话切回项目目录，并撤销开关刚建的
+   空副本；若副本里有提交或改动（或归属不明），副本保留，开关 hover 说明原因，页面顶部给
+   一次性提示与「打开面板」。发过消息之后开关消失，副本留在池里，由面板丢弃。拨开关同时
+   记住这个项目下次的默认位置。
 
 ## 配置
 
@@ -168,27 +199,40 @@ worktree，所以新旧目录的副本都会出现，可以照常丢弃。
   助手在副本里改的文件不会落到源检出的工作树里，但同一会话仍可写源项目根下的文件。
   主检出守卫只覆盖 bash 里明显指向主检出的 git 调用，是提示之外的兜底，不是权限。
 - 不自动合并、不自动回收、不支持多仓库、不识别旧插件的 `.worktree-space/` 目录。
+- **不追溯旧副本**：升级前留下的副本没有归属标记，离开时一律保留并提示「归属不明」，需要
+  在面板里手动丢弃。插件不会为了「修好这件事」而猜。
+- **计数会退化**：「被保留的副本」只是本次宿主生命周期内的知识；宿主重启后入口计数只剩
+  遗留分支可数（面板与本节都写明，避免用户以为计数一直准）。
+- **detached 副本永远不会被开关自动删掉**：只展示、只允许显式丢弃检出，且不删任何分支。
+  这比「猜一个分支名去删」安全，代价是用户要自己回收它。
+- **归属标记在 `.git/worktrees/` 里**：不进版本库、不进工作区、不产生未跟踪文件；但用户
+  `rm -rf` 掉副本目录后，标记要等 Git 注册被 prune 才消失，那期间面板会把该行标成
+  「目录已丢失」，走同一套清理。
 
 ## 实现
 
 宿主半（`src/index.ts`）做三件事：拿 `cordis.patch.yml` 挂上的 `ctx.worktrees` 和
-`ctx.sessionController`，把五个动词注册成 `/api/dsh-worktree-switch/<verb>` 上的精确
+`ctx.sessionController`，把下面七个动词注册成 `/api/dsh-worktree-switch/<verb>` 上的精确
 Fetch 路由（`src/host/routes.ts`），说 `client-request` / `server-response` 信封；另注册一条
-`systemPrompt.context`（`worktree-switch:scope`），内容来自 `SessionScopeRegistry`，由五个
-动词、`agent/created` 和每次组装时的目录校验共同维护。
+`systemPrompt.context`（`worktree-switch:scope`），内容来自 `SessionScopeRegistry`，由这些
+动词、`agent/created` 和每次组装时的目录校验共同维护。「归属」这条记录由
+`src/host/ownership.ts` 读写，落在副本自己的 Git admin dir 里。
 
 | 动词 | 入参 | 行为 |
 |---|---|---|
 | `status` | `{ sessionId }` | 解析仓库根、本会话是否已在某个 linked worktree 里、源仓库未提交改动数 |
 | `prepare` | `{ sessionId }` | 幂等；必要时经 `ctx.worktrees.create` 建副本并切目录，同名冲突自动换名重试 |
-| `release` | `{ sessionId }` | 把会话切回项目目录；删掉开关自己建的那份干净副本，脏副本与非开关建的副本留在池里 |
-| `list` | `{ path }` | 列出该仓库除主检出外的所有 linked worktree，返回名字/分支/路径/创建时间/改动数 |
-| `discard` | `{ path, name }` | 干净才删：`git worktree remove` + `git branch -D`；改动非空则拒绝 |
+| `release` | `{ sessionId }` | 把会话切回项目目录；仅在「有归属 + 仍在基点 + 工作区干净」时撤销副本（检出 + 分支），否则保留并返回 `keptReason`（`dirty` / `not-owned`）与原因；删除失败抛错，不吞成「保留」 |
+| `scope` | `{ sessionId }` | 轻量回答「这条会话在副本里吗」：先读宿主内存里按会话记录的副本，读不到再对当前目录做一次检测；不读源仓库 status、不切目录 |
+| `list` | `{ path }` | 列出该仓库除主检出外的所有 linked worktree（名字/分支/路径/创建时间/改动数/prunable），外加遗留分支（提交数/最近提交/时间）与本次宿主保留的副本数 |
+| `discard` | `{ path, name }` | 干净才删：`git worktree remove` + `git branch -D`；prunable 行先删分支再 prune；detached 副本只移除检出；改动非空则拒绝 |
+| `discardBranch` | `{ path, branch }` | 只删一个遗留分支：要求名字是生成格式、且不在任何 checkout 的 HEAD 上；已删过再删也算成功 |
 
 创建走 harness 的 worktree 服务（沿用它的沙箱、filter 覆盖和失败语义）；`status`/`list`/
 `discard` 是人在界面上的显式动作，用 `ctx.subprocess` 直接跑 Git，与会安装的
-`dsh-worktree-space` 一致。浏览器半（`src/client/index.tsx`）只注册三个槽：开关、keyed
-`main` 面板页、`sidebar.panellist` 入口；状态机在 `src/client/state.ts`，不依赖 React。
+`dsh-worktree-space` 一致。浏览器半（`src/client/index.tsx`）注册五个槽：开关、keyed
+`main` 面板页、`sidebar.panellist` 入口与计数、`conversation.session.header.utilities` 的
+`⎇` badge、`shell.overlay` 的一次性提示；状态机在 `src/client/state.ts`，不依赖 React。
 
 ## 校验
 
@@ -198,7 +242,7 @@ pnpm --filter dsh-worktree-switch test
 pnpm build          # 构建全部包并校验 exports / bundle patch 文件存在
 ```
 
-测试有三条接缝：宿主半的五个动词（真实临时 Git 仓库 + 真实服务，`tests/host.spec.ts`）、
+测试有三条接缝：宿主半的七个动词（真实临时 Git 仓库 + 真实服务，`tests/host.spec.ts`）、
 浏览器半的槽注册与渲染（真实 `SlotRegistry` + 假 `connection`/`conversation`，
 `tests/*.client.spec.tsx`），以及插件公开的配置契约（`tests/config.spec.ts`：`baseRef`
 只接受 `fresh` / `head`）。不断言内部 Git 调用次数，也不测上游 worktree 服务自己的

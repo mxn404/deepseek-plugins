@@ -39,7 +39,7 @@ deepseek-plugins/
 | 包 | 形态 | 一句话 |
 |---|---|---|
 | `dsh-path-rules` | 仅宿主 | 按路径生效的 `.dsh/rules/` 规则；agent 碰到范围内的文件才注入对应约定 |
-| `dsh-worktree-switch` | 宿主 + 浏览器 | 把会话放进 Git worktree 的开关、面板与侧边栏入口 |
+| `dsh-worktree-switch` | 宿主 + 浏览器 | 把会话放进 Git worktree 的开关与面板：离开即撤销、遗留分支可清理、会话头部常驻当前副本 badge |
 | `dsh-lifecycle-hooks` | 仅宿主 | 用户 / 项目 / 本地三层的 `.dsh/hooks.json` 生命周期钩子：拦截/审批工具、改写结果、注入上下文、继续停下的 turn |
 | `dsh-new-session` | 宿主 + 浏览器 | 输入 `/clear`（别名 `/new`）开一段新对话，留在当前工作目录（含 worktree 副本），旧对话保留在历史里 |
 

@@ -20,8 +20,8 @@ worktree 注册被 prune 之后，面板只读 `git worktree list`，于是「�
 - **旧副本不补写标记。** 升级前就存在的副本、以及升级时某个会话正运行在其中的副本，都算
   归属不明；离开时保留并如实提示。补写标记会把手工 `git worktree add` 出来的副本误认成
   开关建的，而那份副本可能带着提交。
-- **删除失败必须可见。** `ReleaseValue` 增加 `keptReason`（`dirty` / `not-owned` /
-  `failed`）与 `error?`；只有 dirty 与 not-owned 允许返回 kept，删除失败必须抛错，不再
+- **删除失败必须可见。** `ReleaseValue` 增加 `keptReason`（只有 `dirty` / `not-owned`
+  两种）与可选 `error`；只有 dirty 与 not-owned 允许返回 kept，删除失败必须抛错，不再
   被吞成「保留」。失败与保留通过帧级浮层（`shell.overlay`）的一次性提示告知，并给出
   「打开面板」动作；侧边栏入口在有待清理项时显示计数。不提供「重试清理」按钮——离开的
   语义已经完成，重复执行它只会让用户在脏副本上反复点一个永远不会成功的按钮。

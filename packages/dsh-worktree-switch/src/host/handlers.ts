@@ -1,5 +1,5 @@
 /**
- * The plugin's host Remote face: the five verbs the browser half can call,
+ * The plugin's host Remote face: the verbs the browser half can call,
  * expressed against a live session and the checkouts on disk.
  *
  * This module is the seam the host tests drive directly. Everything below it —
@@ -19,10 +19,15 @@ import type {} from '@deepseek-ai/dsh-experimental-worktree'
 import type {} from '@deepseek-ai/dsh-working-directory'
 import type {
   BaseRef,
+  CopyRef,
+  DiscardBranchValue,
   DiscardValue,
+  KeptReason,
   ListValue,
+  OrphanBranch,
   PrepareValue,
   ReleaseValue,
+  ScopeValue,
   SessionScope,
   StatusValue,
   WorktreeItem,
@@ -32,22 +37,33 @@ import { resolveBase } from './base.ts'
 import {
   canonicalPath,
   changedFileCount,
+  currentBranch,
   GitFailure,
+  listBranchRefs,
   listWorktreeRecords,
   repositoryRoot,
+  revListCount,
+  revParse,
   runGit,
 } from './git.ts'
-import { isWorktreeName, worktreeName } from './naming.ts'
+import type { GitResult, WorktreeRecord } from './git.ts'
+import { isGeneratedName, isWorktreeName, worktreeName } from './naming.ts'
+import { readOwnership, writeOwnership } from './ownership.ts'
 import { contains } from './paths.ts'
 
 /** Attempts at a fresh name before a creation failure becomes an error. */
 const CREATE_ATTEMPTS = 3
 
 export type {
+  CopyRef,
+  DiscardBranchValue,
   DiscardValue,
+  KeptReason,
   ListValue,
+  OrphanBranch,
   PrepareValue,
   ReleaseValue,
+  ScopeValue,
   SessionScope,
   StatusValue,
   WorktreeItem,
@@ -84,6 +100,13 @@ export interface WorktreeToggleOptions {
    * @param scope - the confirmed copy, or null when the session is not in one.
    */
   readonly onScope?: (sessionId: string, scope: SessionScope | null) => void
+  /**
+   * Read the copy the host already believes a session runs in, so the badge's
+   * `scope` verb can answer without a Git walk.
+   * @param sessionId - wire session identity.
+   * @returns the remembered scope, or null when nothing is known.
+   */
+  readonly readScope?: (sessionId: string) => SessionScope | null
 }
 
 /** The host face the route layer exposes over the Connection fetch bridge. */
@@ -104,25 +127,36 @@ export interface WorktreeToggle {
    */
   prepare(request: { readonly sessionId: string }, signal?: AbortSignal): Promise<PrepareValue>
   /**
-   * Put the session back in its project directory, undoing a copy the switch
-   * created for it when it never became the conversation's workspace.
+   * Put the session back in its project directory and undo the copy the switch
+   * created for it, when that copy is provably untouched: owned, still at its
+   * base commit, and clean. A copy with content, or one whose ownership cannot
+   * be proven, is kept and reported with a reason.
    * @param request - the calling session.
    * @param signal - caller cancellation.
    * @returns the directory the session now runs in, the copy removed, and the
-   * copy left on disk when deleting it was not safe.
-   * @throws {WorktreeToggleError} when the project cannot be resolved or the
-   * session could not be moved back.
+   * copy left on disk with the reason it stayed.
+   * @throws {WorktreeToggleError} when the project cannot be resolved, the
+   * session could not be moved back, or a delete this call attempted failed.
    */
   release(request: { readonly sessionId: string }, signal?: AbortSignal): Promise<ReleaseValue>
   /**
-   * List the copies under one project's pool.
+   * Report whether the session runs in a copy, without touching the source
+   * checkout's status and without moving any directory.
+   * @param request - the calling session.
+   * @param signal - caller cancellation.
+   * @returns the copy, its project root, and the copy's own uncommitted count.
+   */
+  scope(request: { readonly sessionId: string }, signal?: AbortSignal): Promise<ScopeValue>
+  /**
+   * List the copies under one project's pool, the leftover generated-name
+   * branches with no checkout, and how many copies this host kept on leave.
    * @param request - any directory inside the project.
    * @param signal - caller cancellation.
-   * @returns the pool contents, or `supported: false` for a non-repository path.
+   * @returns the project's cleanup picture, or `supported: false` for a non-repository path.
    */
   list(request: { readonly path: string }, signal?: AbortSignal): Promise<ListValue>
   /**
-   * Delete one copy and its branch.
+   * Delete one copy and, unless it is detached, its branch.
    * @param request - a directory inside the project, and the copy's name.
    * @param signal - caller cancellation.
    * @returns the removed copy's identity.
@@ -132,6 +166,29 @@ export interface WorktreeToggle {
     request: { readonly path: string; readonly name: string },
     signal?: AbortSignal,
   ): Promise<DiscardValue>
+  /**
+   * Delete one leftover branch that no checkout has.
+   * @param request - a directory inside the project, and the branch name.
+   * @param signal - caller cancellation.
+   * @returns the deleted branch.
+   * @throws {WorktreeToggleError} when the branch is not a generated name, is
+   * checked out, or Git refused; an already-deleted branch is a success.
+   */
+  discardBranch(
+    request: { readonly path: string; readonly branch: string },
+    signal?: AbortSignal,
+  ): Promise<DiscardBranchValue>
+}
+
+/**
+ * The failure one refused branch delete reports.
+ * @param branch - branch the verb tried to delete.
+ * @param args - the Git command that refused, for the message.
+ * @param result - its captured outcome.
+ * @returns the error the browser half switches on.
+ */
+function branchDeleteFailure(branch: string, args: readonly string[], result: GitResult): WorktreeToggleError {
+  return new WorktreeToggleError('branch-delete-failed', new GitFailure(args, result).message, { branch })
 }
 
 /** Normalize a browser-supplied path before any filesystem work. */
@@ -149,11 +206,18 @@ function absolutePath(value: string): string {
  * from any configured pool path. The pool belongs to the harness worktree
  * service, so this plugin never needs a second copy of that setting: moving the
  * pool in the service's row config keeps every verb working.
+ * @param ctx - host context carrying `subprocess`.
  * @param current - the session's committed working directory.
  * @param repositoryRoot - canonical root of the project's repository.
+ * @param signal - caller cancellation.
  * @returns the copy's identity, or null when the directory is not one.
  */
-async function worktreeAt(current: string, repositoryRoot: string): Promise<WorktreeRef | null> {
+async function worktreeAt(
+  ctx: Context,
+  current: string,
+  repositoryRoot: string,
+  signal?: AbortSignal,
+): Promise<CopyRef | null> {
   const path = await canonicalPath(current)
   if (path === repositoryRoot) return null
   const inside = relative(repositoryRoot, path)
@@ -165,7 +229,9 @@ async function worktreeAt(current: string, repositoryRoot: string): Promise<Work
   } catch {
     return null
   }
-  return { name, path, branch: name }
+  // The checkout's real branch, not its directory name: a detached copy has
+  // none, and reporting the name as one would be a lie every surface repeats.
+  return { name, path, branch: await currentBranch(ctx, path, signal) }
 }
 
 /**
@@ -210,7 +276,7 @@ export async function detectSessionScope(
   signal?.throwIfAborted()
   let probe = current
   for (;;) {
-    const copy = await worktreeAt(probe, root)
+    const copy = await worktreeAt(ctx, probe, root, signal)
     if (copy !== null) return { worktree: copy, repositoryRoot: root }
     const parent = dirname(probe)
     if (probe === root || probe === anchor || parent === probe) return null
@@ -219,21 +285,125 @@ export async function detectSessionScope(
 }
 
 /**
+ * The copy rows of one repository, newest first.
+ *
+ * A row whose checkout directory is gone is still a copy: Git keeps the
+ * registration until it is pruned, and the panel offers the same discard for
+ * it, marked as missing. A detached copy keeps `branch: null` so no verb can
+ * ever mistake the directory name for a branch to delete.
+ * @param ctx - host context carrying `subprocess`.
+ * @param root - canonical repository root.
+ * @param records - `git worktree list` records for the repository.
+ * @param signal - caller cancellation.
+ * @returns one row per copy under the project.
+ */
+async function copyItems(
+  ctx: Context,
+  root: string,
+  records: readonly WorktreeRecord[],
+  signal?: AbortSignal,
+): Promise<WorktreeItem[]> {
+  const items: WorktreeItem[] = []
+  for (const record of records) {
+    signal?.throwIfAborted()
+    const path = await canonicalPath(record.path)
+    // The repository's own checkout is the source, never a copy.
+    if (path === root) continue
+    const name = basename(path)
+    if (!isWorktreeName(name)) continue
+    let createdAt = 0
+    let prunable = true
+    try {
+      const info = await stat(path)
+      createdAt = Math.trunc(info.birthtimeMs > 0 ? info.birthtimeMs : info.mtimeMs)
+      prunable = false
+    } catch {
+      // The checkout directory is gone; Git still lists it until pruned.
+    }
+    const changedFiles = prunable ? 0 : await changedFileCount(ctx, path, signal)
+    items.push({ name, path, branch: record.branch ?? null, createdAt, changedFiles, prunable })
+  }
+  items.sort((left, right) => right.createdAt - left.createdAt || left.name.localeCompare(right.name))
+  return items
+}
+
+/**
+ * Generated-name branches that no checkout holds.
+ *
+ * Deliberately narrow: only the names this plugin generates qualify, so an
+ * ordinary feature branch never appears in a list whose only action is delete.
+ * The commit count is what the source checkout's HEAD does not contain — a
+ * branch whose work is fully merged reads as 0, which is the one safe signal.
+ * @param ctx - host context carrying `subprocess`.
+ * @param root - canonical repository root.
+ * @param records - `git worktree list` records for the repository.
+ * @param signal - caller cancellation.
+ * @returns the leftover branches, newest commit first.
+ */
+async function orphanBranches(
+  ctx: Context,
+  root: string,
+  records: readonly WorktreeRecord[],
+  signal?: AbortSignal,
+): Promise<OrphanBranch[]> {
+  const checkedOut = new Set<string>()
+  for (const record of records) {
+    if (record.branch !== undefined) checkedOut.add(record.branch)
+  }
+  const orphans: OrphanBranch[] = []
+  for (const ref of await listBranchRefs(ctx, root, signal)) {
+    signal?.throwIfAborted()
+    if (!isGeneratedName(ref.name) || checkedOut.has(ref.name)) continue
+    let commits = 0
+    try {
+      commits = await revListCount(ctx, root, `HEAD..${ref.commit}`, signal)
+    } catch {
+      // An unborn HEAD (a repository with no commits) cannot answer; the
+      // branch still lists, with nothing claimed about its size.
+    }
+    orphans.push({
+      branch: ref.name,
+      commits,
+      subject: ref.subject,
+      committedAt: ref.committedAt,
+    })
+  }
+  orphans.sort(
+    (left, right) => right.committedAt - left.committedAt || left.branch.localeCompare(right.branch),
+  )
+  return orphans
+}
+
+/** The wire identity of one listed copy; a detached copy keeps its null branch. */
+function copyRef(item: WorktreeItem): CopyRef {
+  return { name: item.name, path: item.path, branch: item.branch }
+}
+
+/**
  * Build the host face.
  * @param ctx - Host context with `agents`, `worktrees`, `workingDirectory`, and `subprocess`.
  * @param options - resolved row config.
- * @returns the five verbs.
+ * @returns the verbs above.
  */
 export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOptions): WorktreeToggle {
   /** One in-flight preparation per session, so a double mount cannot create twice. */
   const pending = new Map<string, Promise<PrepareValue>>()
   /**
-   * Copies this host instance created for a session, by session id. Turning the
-   * switch off may only delete what the switch itself just made: a copy that
-   * existed before this instance started is left for the panel's explicit
-   * discard, because it may carry work the switch never saw.
+   * Copies this host instance kept when the switch was turned off, by
+   * repository root. A host restart forgets them; the panel's count then
+   * honestly drops back to leftovers only.
    */
-  const createdBySession = new Map<string, WorktreeRef>()
+  const keptCopies = new Map<string, Set<string>>()
+
+  const keep = (root: string, name: string): void => {
+    const names = keptCopies.get(root) ?? new Set<string>()
+    names.add(name)
+    keptCopies.set(root, names)
+  }
+
+  const forget = (root: string, name: string): void => {
+    keptCopies.get(root)?.delete(name)
+  }
 
   const sessionOf = async (sessionId: string, signal?: AbortSignal): Promise<Agent> => {
     signal?.throwIfAborted()
@@ -277,7 +447,7 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
     const current = ctx.workingDirectory.get(agent.session)
     signal?.throwIfAborted()
     const sourceDirty = await changedFileCount(ctx, root, signal)
-    const copy = await worktreeAt(current, root)
+    const copy = await worktreeAt(ctx, current, root, signal)
     options.onScope?.(request.sessionId, copy === null ? null : { worktree: copy, repositoryRoot: root })
     return {
       supported: true,
@@ -335,7 +505,23 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
       try {
         const created = await ctx.worktrees.create(agent, { name, from: base.from }, signal)
         const worktree: WorktreeRef = { name: created.branch, path: created.path, branch: created.branch }
-        createdBySession.set(request.sessionId, worktree)
+        // Record the claim where it survives a restart. No caller signal here:
+        // the copy already exists and the session is already inside it, so
+        // finishing this bookkeeping beats aborting half-done. A failed write
+        // must not fail the creation either — the copy then reads as not-owned
+        // later, is kept, and the notice says so.
+        const baseCommit = await revParse(ctx, created.path, 'HEAD')
+        if (baseCommit !== null) {
+          try {
+            await writeOwnership(ctx, created.path, {
+              sessionId: request.sessionId,
+              createdAt: Date.now(),
+              baseCommit,
+            })
+          } catch {
+            // Deliberately swallowed: see above.
+          }
+        }
         options.onScope?.(request.sessionId, { worktree, repositoryRoot: created.repositoryRoot })
         return {
           state: 'created',
@@ -377,6 +563,30 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
     }
   }
 
+  const scope = async (
+    request: { readonly sessionId: string },
+    signal?: AbortSignal,
+  ): Promise<ScopeValue> => {
+    const agent = await sessionOf(request.sessionId, signal)
+    const current = ctx.workingDirectory.get(agent.session)
+    const known = options.readScope?.(request.sessionId) ?? null
+    // The host's own memory answers first; the directory check only re-derives
+    // when the session has moved somewhere memory does not explain.
+    const found = known !== null && contains(known.worktree.path, current)
+      ? known
+      : await detectSessionScope(ctx, agent, signal)
+    if (found === null) return { inWorktree: false }
+    signal?.throwIfAborted()
+    const changedFiles = await changedFileCount(ctx, found.worktree.path, signal)
+    options.onScope?.(request.sessionId, found)
+    return {
+      inWorktree: true,
+      worktree: found.worktree,
+      repositoryRoot: found.repositoryRoot,
+      changedFiles,
+    }
+  }
+
   const list = async (
     request: { readonly path: string },
     signal?: AbortSignal,
@@ -390,45 +600,78 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
       throw error
     }
     const records = await listWorktreeRecords(ctx, root, signal)
-    const items: WorktreeItem[] = []
-    for (const record of records) {
-      signal?.throwIfAborted()
-      const path = await canonicalPath(record.path)
-      // The repository's own checkout is the source, never a copy.
-      if (path === root) continue
-      const name = basename(path)
-      if (!isWorktreeName(name)) continue
-      const branch = record.branch ?? name
-      let createdAt = 0
-      let prunable = true
-      try {
-        const info = await stat(path)
-        createdAt = Math.trunc(info.birthtimeMs > 0 ? info.birthtimeMs : info.mtimeMs)
-        prunable = false
-      } catch {
-        // The checkout directory is gone; Git still lists it until pruned.
-      }
-      const changedFiles = prunable ? 0 : await changedFileCount(ctx, path, signal)
-      items.push({ name, path, branch, createdAt, changedFiles, prunable })
-    }
-    items.sort((left, right) => right.createdAt - left.createdAt || left.name.localeCompare(right.name))
-    return { supported: true, repositoryRoot: root, items }
+    const items = await copyItems(ctx, root, records, signal)
+    const orphans = await orphanBranches(ctx, root, records, signal)
+    const kept = keptCopies.get(root)
+    // Only copies that still exist count: a kept copy someone deleted by hand
+    // must not inflate the number the sidebar shows.
+    const keptCopiesStillHere = kept === undefined
+      ? 0
+      : items.filter(item => kept.has(item.name)).length
+    return { supported: true, repositoryRoot: root, items, orphans, keptCopies: keptCopiesStillHere }
   }
 
   /**
-   * Delete one clean copy and its branch. Both the panel's discard and the
-   * switch's own undo go through here, so the dirty guard has one home.
+   * Delete one branch by name.
+   * @param root - canonical repository root.
+   * @param branch - branch to delete; already validated by the caller.
+   * @param signal - caller cancellation.
+   * @throws {WorktreeToggleError} when Git refused.
+   */
+  const deleteBranch = async (root: string, branch: string, signal?: AbortSignal): Promise<void> => {
+    const deleted = await runGit(ctx, root, ['branch', '-D', '--', branch], {
+      signal,
+      allowedExitCodes: [0, 1],
+    })
+    // Status 1 with "not found" is the branch already being gone (removed by
+    // hand between the read and the click); that is not a failed delete.
+    const gone = deleted.exitCode === 1 && /not found/i.test(deleted.stderr)
+    if (deleted.exitCode !== 0 && !gone) throw branchDeleteFailure(branch, ['branch', '-D', branch], deleted)
+  }
+
+  /**
+   * Delete a branch a prunable copy still holds.
+   *
+   * `git branch -D` refuses while any worktree registration names the branch,
+   * even a registration whose directory is gone, so the branch is removed
+   * through the ref itself. The registration still pins Git's bookkeeping, but
+   * nothing can have the branch checked out any more: the directory is missing.
+   * @param root - canonical repository root.
+   * @param branch - branch to delete; already validated by the caller.
+   * @param signal - caller cancellation.
+   * @throws {WorktreeToggleError} when Git refused (for example a locked ref).
+   */
+  const deleteBranchByRef = async (root: string, branch: string, signal?: AbortSignal): Promise<void> => {
+    const deleted = await runGit(ctx, root, ['update-ref', '-d', `refs/heads/${branch}`], {
+      signal,
+      allowedExitCodes: [0, 1],
+    })
+    if (deleted.exitCode !== 0) {
+      throw branchDeleteFailure(branch, ['update-ref', '-d', branch], deleted)
+    }
+  }
+
+  /**
+   * Delete one clean copy and, unless it is detached, its branch.
+   *
+   * Both the panel's discard and the switch's own undo go through here, so the
+   * dirty guard and the delete order have one home. A prunable copy — its
+   * directory was deleted by hand — deletes the branch first and prunes the
+   * registration only once that succeeded, so a refused delete cannot leave the
+   * registration already gone.
    * @param root - canonical repository root.
    * @param name - copy name; already validated by the caller.
    * @param signal - caller cancellation.
    * @returns the removed copy's identity.
    */
-  const removeCopy = async (root: string, name: string, signal?: AbortSignal): Promise<DiscardValue> => {
-    const listed = await list({ path: root }, signal)
-    if (!listed.supported) {
-      throw new WorktreeToggleError('not-a-git-repository', 'the project is not inside a Git working tree')
-    }
-    const item = listed.items.find(entry => entry.name === name)
+  const removeCopy = async (
+    root: string,
+    name: string,
+    signal?: AbortSignal,
+  ): Promise<DiscardValue> => {
+    const records = await listWorktreeRecords(ctx, root, signal)
+    const items = await copyItems(ctx, root, records, signal)
+    const item = items.find(entry => entry.name === name)
     if (item === undefined) {
       throw new WorktreeToggleError(
         'worktree-not-found',
@@ -444,6 +687,7 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
       )
     }
     if (item.prunable) {
+      if (item.branch !== null) await deleteBranchByRef(root, item.branch, signal)
       await runGit(ctx, root, ['worktree', 'prune'], { signal })
     } else {
       const removed = await runGit(ctx, root, ['worktree', 'remove', item.path], {
@@ -457,24 +701,9 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
           { name: item.name, path: item.path },
         )
       }
+      if (item.branch !== null) await deleteBranch(root, item.branch, signal)
     }
-    const deleted = await runGit(ctx, root, ['branch', '-D', '--', item.branch], {
-      signal,
-      allowedExitCodes: [0, 1],
-    })
-    // Status 1 with "not found" is the branch already being gone (removed by
-    // hand between the read and the click); that is not a failed discard.
-    const branchGone = deleted.exitCode === 1 && /not found/i.test(deleted.stderr)
-    if (deleted.exitCode !== 0 && !branchGone) {
-      throw new WorktreeToggleError(
-        'worktree-remove-failed',
-        new GitFailure(['branch', '-D', item.branch], deleted).message,
-        { name: item.name, branch: item.branch },
-      )
-    }
-    for (const [sessionId, copy] of createdBySession) {
-      if (copy.path === item.path) createdBySession.delete(sessionId)
-    }
+    forget(root, item.name)
     return { removed: true, name: item.name, branch: item.branch, path: item.path }
   }
 
@@ -488,6 +717,33 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
     }
     const root = await repositoryOf(ctx, directory, signal)
     return await removeCopy(root, request.name, signal)
+  }
+
+  const discardBranch = async (
+    request: { readonly path: string; readonly branch: string },
+    signal?: AbortSignal,
+  ): Promise<DiscardBranchValue> => {
+    const directory = absolutePath(request.path)
+    if (!isGeneratedName(request.branch)) {
+      throw new WorktreeToggleError(
+        'branch-name-invalid',
+        `not a branch this plugin generated: ${request.branch}`,
+      )
+    }
+    const root = await repositoryOf(ctx, directory, signal)
+    const records = await listWorktreeRecords(ctx, root, signal)
+    if (records.some(record => record.branch === request.branch)) {
+      throw new WorktreeToggleError(
+        'branch-in-use',
+        `${request.branch} is checked out by a worktree; discard that copy instead`,
+        { branch: request.branch },
+      )
+    }
+    // Deleting a branch that is already gone is the second click of a double
+    // click, not a failure: the caller's goal is reached either way.
+    const known = new Set((await listBranchRefs(ctx, root, signal)).map(ref => ref.name))
+    if (known.has(request.branch)) await deleteBranch(root, request.branch, signal)
+    return { removed: true, branch: request.branch }
   }
 
   const release = async (
@@ -522,15 +778,15 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
       }
       throw error
     }
-    const listed = await list({ path: anchor }, signal)
-    if (!listed.supported) return { directory: current, removed: null, kept: null }
+    const records = await listWorktreeRecords(ctx, root, signal)
+    const items = await copyItems(ctx, root, records, signal)
     const path = await canonicalPath(current)
-    const item = listed.items.find(entry => contains(entry.path, path))
+    const item = items.find(entry => contains(entry.path, path))
     if (item === undefined) {
       options.onScope?.(request.sessionId, null)
-      return { directory: current, removed: null, kept: null }
+      return { directory: current, removed: null, kept: null, keptReason: null }
     }
-    const copy: WorktreeRef = { name: item.name, path: item.path, branch: item.branch }
+    const copy = copyRef(item)
     signal?.throwIfAborted()
     let directory: string
     try {
@@ -543,25 +799,52 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
       )
     }
     options.onScope?.(request.sessionId, null)
-    const mine = createdBySession.get(request.sessionId)
-    if (mine === undefined || mine.path !== copy.path) {
-      // Not the switch's own copy: leave it, the panel can discard it by hand.
-      return { directory, removed: null, kept: copy }
+    const keepCopy = (reason: KeptReason, error?: string): ReleaseValue => {
+      keep(root, item.name)
+      return error === undefined
+        ? { directory, removed: null, kept: copy, keptReason: reason }
+        : { directory, removed: null, kept: copy, keptReason: reason, error }
     }
-    try {
-      const removed = await removeCopy(root, copy.name, signal)
-      return {
-        directory,
-        removed: { name: removed.name, path: removed.path, branch: removed.branch },
-        kept: null,
+    // Ownership, not memory, decides: the claim was written into the copy's own
+    // admin directory when it was created, so a restarted host still knows.
+    const ownership = await readOwnership(ctx, item.path, signal)
+    if (ownership === null || ownership.sessionId !== request.sessionId) {
+      return keepCopy('not-owned')
+    }
+    if (item.changedFiles > 0) {
+      return keepCopy('dirty', `${item.changedFiles} uncommitted change(s)`)
+    }
+    // Nothing may have happened inside the copy for it to be undone: the tip
+    // must still be the commit it was created from.
+    const tip = await revParse(ctx, item.path, 'HEAD', signal)
+    if (tip === null || tip !== ownership.baseCommit) {
+      let commits = 0
+      try {
+        commits = await revListCount(ctx, item.path, `${ownership.baseCommit}..HEAD`, signal)
+      } catch {
+        // The base commit is gone (for example after a rebase); the copy still
+        // has content this call cannot undo, so it stays.
       }
+      return keepCopy('dirty', `${commits} new commit(s)`)
+    }
+    // From here on a failure is reported, never swallowed: the caller is not
+    // told the switch is off while a delete it attempted silently failed. The
+    // copy (or the branch it left behind) is a cleanup item, so record it
+    // before throwing — the sidebar count is how a person finds it again.
+    let removed: DiscardValue
+    try {
+      removed = await removeCopy(root, item.name, signal)
     } catch (error) {
-      if (signal?.aborted === true) throw error
-      // Dirty or refused by Git: the session is still back in the project, so
-      // the switch keeps its promise; the copy stays for the panel to handle.
-      return { directory, removed: null, kept: copy }
+      keep(root, item.name)
+      throw error
+    }
+    return {
+      directory,
+      removed: { name: removed.name, path: removed.path, branch: removed.branch },
+      kept: null,
+      keptReason: null,
     }
   }
 
-  return { status, prepare, release, list, discard }
+  return { status, prepare, release, scope, list, discard, discardBranch }
 }

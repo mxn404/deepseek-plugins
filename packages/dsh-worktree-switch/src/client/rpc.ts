@@ -1,5 +1,5 @@
 /**
- * Browser-side caller for this plugin's five host verbs.
+ * Browser-side caller for this plugin's host verbs.
  *
  * Typed at the wire boundary by hand: the plugin's host half answers exact
  * Connection fetch routes, so there is no generated Remote namespace to import.
@@ -26,7 +26,7 @@ const PREFIX = 'dsh-worktree-switch'
  */
 export async function callHost<T>(
   ctx: Context,
-  endpoint: 'status' | 'prepare' | 'release' | 'list' | 'discard',
+  endpoint: 'status' | 'prepare' | 'release' | 'scope' | 'list' | 'discard' | 'discardBranch',
   payload: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<T> {
