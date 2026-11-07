@@ -62,6 +62,7 @@ export function chipHint(state: ToggleState, t: Translate): string {
         branch: state.worktree?.branch ?? '',
         path: state.worktree?.path ?? '',
       })]
+      if (state.base?.kind === 'fallback') parts.push(t('chip.hint.baseFallback'))
       if (!state.intent) parts.push(t('chip.hint.intentOff', { name: state.worktree?.name ?? '' }))
       if (state.sourceDirty > 0) parts.push(t('chip.hint.dirty', { count: state.sourceDirty }))
       if (state.error !== null) parts.push(state.error)

@@ -239,12 +239,15 @@ export function unsupportedStatus(defaultEnabled = false): Extract<StatusValue, 
  * @param overrides - fields to replace.
  * @returns the prepare value.
  */
-export function prepareValue(overrides: Partial<PrepareValue> = {}): PrepareValue {
+export function prepareValue(
+  overrides: Partial<Extract<PrepareValue, { state: 'created' }>> = {},
+): PrepareValue {
   return {
     state: 'created',
     worktree: copyRef(),
     repositoryRoot: REPOSITORY,
     sourceDirty: 0,
+    base: { kind: 'remote', branch: 'main' },
     ...overrides,
   }
 }

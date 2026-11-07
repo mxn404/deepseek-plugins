@@ -18,6 +18,7 @@ import type {} from '@deepseek-ai/dsh-api-session-controller'
 import type {} from '@deepseek-ai/dsh-experimental-worktree'
 import type {} from '@deepseek-ai/dsh-working-directory'
 import type {
+  BaseRef,
   DiscardValue,
   ListValue,
   PrepareValue,
@@ -27,6 +28,7 @@ import type {
   WorktreeItem,
   WorktreeRef,
 } from '../types.ts'
+import { resolveBase } from './base.ts'
 import {
   canonicalPath,
   changedFileCount,
@@ -73,6 +75,8 @@ export class WorktreeToggleError extends Error {
 export interface WorktreeToggleOptions {
   /** Default for a project nothing has remembered yet. */
   readonly defaultEnabled: boolean
+  /** Commit a new copy starts from: the fetched remote default branch, or local HEAD. */
+  readonly baseRef: BaseRef
   /**
    * Report what each verb learned about the session's copy, so the model-facing
    * scope hint can follow it without a second Git walk.
@@ -321,12 +325,15 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
         { repositoryRoot: current.repositoryRoot, workingProject },
       )
     }
+    // The base is resolved once, before any name attempt: a fetch is the one
+    // costly step here, and a name collision must not repeat it.
+    const base = await resolveBase(ctx, current.repositoryRoot, options.baseRef, signal)
     let lastFailure: unknown
     for (let attempt = 0; attempt < CREATE_ATTEMPTS; attempt += 1) {
       signal?.throwIfAborted()
       const name = worktreeName()
       try {
-        const created = await ctx.worktrees.create(agent, { name, from: 'HEAD' }, signal)
+        const created = await ctx.worktrees.create(agent, { name, from: base.from }, signal)
         const worktree: WorktreeRef = { name: created.branch, path: created.path, branch: created.branch }
         createdBySession.set(request.sessionId, worktree)
         options.onScope?.(request.sessionId, { worktree, repositoryRoot: created.repositoryRoot })
@@ -335,6 +342,7 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
           worktree,
           repositoryRoot: created.repositoryRoot,
           sourceDirty: current.sourceDirty,
+          base: base.base,
         }
       } catch (error) {
         lastFailure = error

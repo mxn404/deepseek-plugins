@@ -20,7 +20,7 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
 import { act, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import type { ConnectionRpcResult } from '@deepseek-ai/dsh-client-connection/client'
 import { resolveSlotLabel } from '@deepseek-ai/dsh-client-ui-slots'
-import { en } from '../src/client/locales.ts'
+import { en, zh } from '../src/client/locales.ts'
 import { INTENT_STORAGE_KEY } from '../src/client/intent.ts'
 import {
   copyRef, fail, ok, prepareValue, releaseValue, REPOSITORY, SESSION, setup, supportedStatus,
@@ -386,5 +386,43 @@ describe('turning isolation off before the first prompt', () => {
     const hint = chipOf(view).getAttribute('data-hint')
     expect(hint).toContain('permission denied removing the checkout')
     expect(hint).toContain(en['chip.hint.intentOff'].replace('{name}', COPY.name))
+  })
+})
+
+describe('the ready face reports a degraded base', () => {
+  it('adds the fallback sentence to the hover hint only when the fetch failed', async () => {
+    const harness = await setup()
+    scriptStatus(harness, supportedStatus())
+    harness.connection.setAnswer('prepare', () => ok(prepareValue({ base: { kind: 'fallback' } })))
+
+    const view = renderChip(harness)
+    await waitFor(() => { expect(view.view.getByText(`Worktree: ${COPY.name}`)).toBeTruthy() })
+
+    const hint = chipOf(view).getAttribute('data-hint') ?? ''
+    expect(hint).toContain(`Branch ${COPY.branch}`)
+    expect(hint).toContain(en['chip.hint.baseFallback'])
+  })
+
+  it('keeps the hint at the fetched base when the fetch succeeded', async () => {
+    const harness = await setup()
+    scriptStatus(harness, supportedStatus())
+    harness.connection.setAnswer('prepare', () => ok(prepareValue()))
+
+    const view = renderChip(harness)
+    await waitFor(() => { expect(view.view.getByText(`Worktree: ${COPY.name}`)).toBeTruthy() })
+
+    expect(chipOf(view).getAttribute('data-hint')).not.toContain(en['chip.hint.baseFallback'])
+  })
+
+  it('localizes the fallback sentence', async () => {
+    const harness = await setup()
+    harness.locale.setLocale('zh')
+    scriptStatus(harness, supportedStatus())
+    harness.connection.setAnswer('prepare', () => ok(prepareValue({ base: { kind: 'fallback' } })))
+
+    const view = renderChip(harness)
+    await waitFor(() => { expect(view.view.getByText(`Worktree：${COPY.name}`)).toBeTruthy() })
+
+    expect(chipOf(view).getAttribute('data-hint')).toContain(zh['chip.hint.baseFallback'])
   })
 })

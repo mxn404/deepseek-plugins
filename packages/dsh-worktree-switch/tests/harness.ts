@@ -10,7 +10,7 @@
  */
 
 import { execFile } from 'node:child_process'
-import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -160,6 +160,78 @@ export async function repository(options: RepositoryOptions = {}, parent = tmpdi
  */
 export async function temporaryDirectory(parent = tmpdir()): Promise<string> {
   return realpath(await mkdtemp(join(parent, 'dsh-worktree-switch-')))
+}
+
+/**
+ * A local-only remote setup: a bare repository that plays `origin`, plus a
+ * clone whose local branch is left one commit behind the remote tip.
+ *
+ * The remote is reached through a `file://` URL, so `git fetch` runs the real
+ * transport — offline, fast, and without any credential path.
+ */
+export interface RemoteFixture {
+  /** One temporary directory holding everything below; remove it to clean up. */
+  readonly root: string
+  /** Checkout the session's project lives in; its local branch is behind. */
+  readonly clone: string
+  /** Commit the clone has locally (the stale base a `head` copy would use). */
+  readonly behind: string
+  /** Commit `origin/<branch>` points at after the fixture is built. */
+  readonly ahead: string
+  /** The default branch the fixture used. */
+  readonly branch: string
+}
+
+/** Options for {@link remoteFixture}. */
+export interface RemoteFixtureOptions {
+  /** Default branch of the bare repository; defaults to `main`. */
+  readonly branch?: string
+}
+
+/**
+ * Build a bare origin and a clone left behind it.
+ *
+ * The clone is made while the remote is still at the first commit, then the
+ * remote advances: the clone's `origin/<branch>` is stale, which is exactly the
+ * state a user whose checkout is a day old is in.
+ * @param options - default branch name.
+ * @param parent - directory the fixture is created under; defaults to the OS temp dir.
+ * @returns the fixture paths and the two commits on the default branch.
+ */
+export async function remoteFixture(
+  options: RemoteFixtureOptions = {},
+  parent = tmpdir(),
+): Promise<RemoteFixture> {
+  const branch = options.branch ?? 'main'
+  const root = await realpath(await mkdtemp(join(parent, 'dsh-worktree-remote-')))
+  const remote = join(root, 'origin.git')
+  const seed = join(root, 'seed')
+  const clone = join(root, 'clone')
+  try {
+    await mkdir(remote)
+    await git(remote, 'init', '--bare', '-b', branch)
+    await mkdir(seed)
+    await git(seed, 'init', '-b', branch)
+    await git(seed, 'config', 'core.autocrlf', 'false')
+    await git(seed, 'config', 'user.name', 'Worktree switch fixture')
+    await git(seed, 'config', 'user.email', 'worktree-switch@example.invalid')
+    await git(seed, 'config', 'commit.gpgSign', 'false')
+    await writeFile(join(seed, 'tracked.txt'), 'behind\n')
+    await git(seed, 'add', 'tracked.txt')
+    await git(seed, 'commit', '-m', 'behind')
+    await git(seed, 'remote', 'add', 'origin', `file://${remote}`)
+    await git(seed, 'push', 'origin', branch)
+    await git(root, 'clone', `file://${remote}`, clone)
+    const behind = await git(clone, 'rev-parse', 'HEAD')
+    await writeFile(join(seed, 'tracked.txt'), 'ahead\n')
+    await git(seed, 'commit', '-am', 'ahead')
+    await git(seed, 'push', 'origin', branch)
+    const ahead = await git(seed, 'rev-parse', 'HEAD')
+    return { root, clone, behind, ahead, branch }
+  } catch (error) {
+    await rm(root, { recursive: true, force: true })
+    throw error
+  }
 }
 
 /**

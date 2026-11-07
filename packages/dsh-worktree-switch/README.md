@@ -7,6 +7,10 @@
 在 **Worktrees 面板**里把它丢弃，或者自己把分支合回源仓库。会话在副本里时，宿主半还会
 给模型一条工作区说明，并拒绝把 git 指向主检出的 shell 调用（可关）。
 
+新建副本默认以创建前刚拉取到的 `origin/<默认分支>` 为基点，而不是主检出的本地 `HEAD`
+（见「创建基点」）。语义基线与有意偏离见
+[ADR-0005](../../docs/adr/0005-worktree-base-ref-deviates-from-claude-code.md)。
+
 ## 它做什么
 
 - **开关**（`conversation.input.left` 槽，只在空白新会话的 hero 上出现）：显示本会话
@@ -14,8 +18,9 @@
   重试）/ 不可用（项目不是 Git 仓库）。开关位置本身记的是"这个项目的新会话要不要隔离"。
 - **创建**发生在开关打开的那一刻，早于第一条消息；**关闭**发生在第一条消息之前时，
   会话被切回项目目录，开关在这次打开中建的那份干净副本被删除（脏副本或开关之前就存在
-  的副本留在池里，交给面板处理）。副本名 = 分支名 = 池内目录名，形如
-  `quiet-harbor-3fa9`，由插件生成，短且唯一。
+  的副本留在池里，交给面板处理）。副本默认从创建前刚拉取到的 `origin/<默认分支>` 起；
+  `baseRef: 'head'` 或远端取不到时回退为本地 `HEAD`（见「创建基点」）。副本名 = 分支名 = 池内
+  目录名，形如 `quiet-harbor-3fa9`，由插件生成，短且唯一。
 - **创建失败不回落**：提示词不发送，错误就地显示。从检查开始、到副本就绪之前、离开副本
   的过程中（或失败之后），开关通过 `ctx.conversation.blocks` 把该会话的输入框置为"暂停
   发送"；重试成功、关掉开关（确认不要隔离）或副本就绪时才解除。关掉开关是明确的退出
@@ -102,12 +107,45 @@ profile 的 patch 层里按上面的写法重新声明 `directory`，否则池�
 改完重启 profile 生效。已经在旧目录里的副本不会消失：面板列的是仓库的所有 linked
 worktree，所以新旧目录的副本都会出现，可以照常丢弃。
 
-### 开关默认
+### 开关默认与基点
 
 | 字段 | 默认 | 含义 |
 |---|---|---|
 | `defaultEnabled` | `true` | 用户从未在这个项目上拨过开关时，新会话是否默认隔离。用户拨过一次后，按项目记在浏览器 localStorage 里，优于此项。 |
 | `guardSourceCheckout` | `true` | 会话在副本里时，用 `tools/pre-execute` 拒绝把 git 指向主检出的 bash 调用。关掉就只剩提示。 |
+| `baseRef` | `'fresh'` | 创建副本前从 `origin` 拉取默认分支作为基点；`head` 则直接基于本地 HEAD、不联网。 |
+
+### 创建基点
+
+新建的副本默认**不从本地 HEAD 起**。开关真正要建副本之前（拨开开关、且只有那一刻），
+宿主半只从 `origin` 拉一个分支——默认分支。解析顺序是 `refs/remotes/origin/HEAD` →
+`main` → `master`，拉取带 5 秒超时，副本以拉取到的那个提交为基点。只拉这一个分支，其他
+分支和 tag 都不动。
+
+- `baseRef` 默认是 `fresh`：如上所述。主检出落后于远端时，新会话仍从团队已经推上来的
+  代码开始。
+- `baseRef: 'head'`：完全跳过默认分支解析与 fetch，直接基于主检出的本地 `HEAD`，不联网。
+  这是「把 feature 分支里未推送的工作带进副本」的逃生门，也是离线时的确定行为。
+
+**回退一律不阻断创建**：没有 `origin` 远端、远端没有可识别的默认分支、fetch 失败或超时，
+都静默回退到本地 HEAD，副本照建。唯一会显式说出来的是「有远端、找到了默认分支、fetch 没
+成功」这一种：开关的 hover 提示里会多一句「基点：本地 HEAD（远端未取到）」，开关本身的
+文案不变。
+
+只有「即将创建副本」会联网：已经在副本里的会话、`status`、`release`、`discard` 都不 fetch。
+
+在 profile 自己的 patch 层设置（和 `defaultEnabled` 一样，没有 GUI 控件）：
+
+```yaml
+# ~/.dsh/profiles/web/cordis.patch.yml
+- id: dsh-worktree-switch
+  name: dsh-worktree-switch
+  config:
+    baseRef: 'head'
+```
+
+`baseRef` 只接受 `fresh` / `head` 两个字面量，写成别的会让插件在挂载时失败、profile 起不
+来，而不是静默选另一个基点。
 
 ## 目录与命名
 
@@ -160,9 +198,10 @@ pnpm --filter dsh-worktree-switch test
 pnpm build          # 构建全部包并校验 exports / bundle patch 文件存在
 ```
 
-测试只有两条接缝：宿主半的五个动词（真实临时 Git 仓库 + 真实服务，`tests/host.spec.ts`）
-和浏览器半的槽注册与渲染（真实 `SlotRegistry` + 假 `connection`/`conversation`，
-`tests/*.client.spec.tsx`）。不断言内部 Git 调用次数，也不测上游 worktree 服务自己的
+测试有三条接缝：宿主半的五个动词（真实临时 Git 仓库 + 真实服务，`tests/host.spec.ts`）、
+浏览器半的槽注册与渲染（真实 `SlotRegistry` + 假 `connection`/`conversation`，
+`tests/*.client.spec.tsx`），以及插件公开的配置契约（`tests/config.spec.ts`：`baseRef`
+只接受 `fresh` / `head`）。不断言内部 Git 调用次数，也不测上游 worktree 服务自己的
 Git 细节。
 
 浏览器半为什么自带一个 `tests/client-harness.ts` 而不是用官方的

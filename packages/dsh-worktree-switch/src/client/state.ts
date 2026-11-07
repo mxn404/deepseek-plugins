@@ -13,7 +13,7 @@ import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type {} from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
-import type { ListValue, PrepareValue, ReleaseValue, StatusValue, WorktreeItem, WorktreeRef } from '../types.ts'
+import type { ListValue, PrepareBase, PrepareValue, ReleaseValue, StatusValue, WorktreeItem, WorktreeRef } from '../types.ts'
 import { readIntent, writeIntent } from './intent.ts'
 import { callHost } from './rpc.ts'
 
@@ -32,6 +32,8 @@ export interface ToggleState {
   readonly repositoryRoot: string | null
   /** Changed and untracked files in the source checkout, once known. */
   readonly sourceDirty: number
+  /** Where the copy's base came from, when this page created it; null otherwise. */
+  readonly base: PrepareBase | null
   /** Readable failure for the failed face. */
   readonly error: string | null
 }
@@ -43,6 +45,7 @@ const INITIAL: ToggleState = {
   worktree: null,
   repositoryRoot: null,
   sourceDirty: 0,
+  base: null,
   error: null,
 }
 
@@ -162,6 +165,7 @@ class InternalBinding {
         worktree: status.sessionWorktree,
         repositoryRoot: status.repositoryRoot,
         sourceDirty: status.sourceDirty,
+        base: null,
         error: null,
       }
       if (status.sessionWorktree !== null) {
@@ -211,6 +215,7 @@ class InternalBinding {
         worktree: prepared.worktree,
         repositoryRoot: prepared.repositoryRoot,
         sourceDirty: prepared.sourceDirty,
+        base: prepared.state === 'created' ? prepared.base : null,
         error: null,
       })
     } catch (error) {
@@ -249,7 +254,7 @@ class InternalBinding {
       await callHost<ReleaseValue>(this.ctx, 'release', { sessionId: this.sessionId }, this.signal)
       if (this.signal.aborted) return
       const now = this.store.getSnapshot()
-      this.store.set({ ...now, phase: 'off', intent: false, worktree: null, error: null })
+      this.store.set({ ...now, phase: 'off', intent: false, worktree: null, base: null, error: null })
     } catch (error) {
       if (this.signal.aborted) return
       const now = this.store.getSnapshot()
