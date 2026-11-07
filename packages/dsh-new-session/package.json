@@ -1,6 +1,6 @@
 {
   "name": "dsh-new-session",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "A `/new` slash command in the Web GUI composer: start a fresh Session in the current Workspace without leaving the keyboard.",
   "keywords": [
     "dsh",
