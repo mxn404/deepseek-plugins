@@ -13,9 +13,10 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { assembleContextFor } from '@deepseek-ai/dsh-agent'
 import { WorktreeToggleError, createWorktreeToggle, detectSessionScope } from '../src/host/handlers.ts'
-import type { WorktreeToggle } from '../src/host/handlers.ts'
+import type { PrepareValue, WorktreeToggle } from '../src/host/handlers.ts'
 import { installWorktreeScope, SessionScopeRegistry } from '../src/host/scope.ts'
-import { POOL_DIRECTORY, git, harness, repository, temporaryDirectory, testAgent } from './harness.ts'
+import { POOL_DIRECTORY, git, harness, remoteFixture, repository, temporaryDirectory, testAgent } from './harness.ts'
+import type { RemoteFixture } from './harness.ts'
 
 let ctx: Context | undefined
 const roots: string[] = []
@@ -38,12 +39,18 @@ interface Fixture {
  * @param root - repository root the filesystem provider starts in.
  * @param startDirectory - session creation directory; defaults to the root.
  * @param defaultEnabled - row config reported in status; defaults to true.
+ * @param baseRef - configured base point; defaults to `fresh`.
  * @returns the live fixture.
  */
-async function fixture(root: string, startDirectory = root, defaultEnabled = true): Promise<Fixture> {
+async function fixture(
+  root: string,
+  startDirectory = root,
+  defaultEnabled = true,
+  baseRef: 'fresh' | 'head' = 'fresh',
+): Promise<Fixture> {
   ctx = await harness(root)
   const agent = testAgent(ctx, startDirectory)
-  const toggle = createWorktreeToggle(ctx, { defaultEnabled })
+  const toggle = createWorktreeToggle(ctx, { defaultEnabled, baseRef })
   return { ctx, agent, toggle }
 }
 
@@ -54,12 +61,14 @@ async function fixture(root: string, startDirectory = root, defaultEnabled = tru
  * @param root - repository root the filesystem provider starts in.
  * @param startDirectory - session creation directory; defaults to the root.
  * @param defaultEnabled - row config reported in status; defaults to true.
+ * @param baseRef - configured base point; defaults to `fresh`.
  * @returns the live fixture plus the registry the prompt context reads.
  */
 async function scopeFixture(
   root: string,
   startDirectory = root,
   defaultEnabled = true,
+  baseRef: 'fresh' | 'head' = 'fresh',
 ): Promise<Fixture & { readonly scopes: SessionScopeRegistry }> {
   const host = await harness(root)
   ctx = host
@@ -71,6 +80,7 @@ async function scopeFixture(
   })
   const toggle = createWorktreeToggle(host, {
     defaultEnabled,
+    baseRef,
     onScope: (sessionId, scope) => {
       if (scope === null) scopes.forget(sessionId)
       else scopes.remember(sessionId, scope)
@@ -88,6 +98,17 @@ async function repo(options: Parameters<typeof repository>[0] = {}): Promise<str
   const root = await repository(options)
   roots.push(root)
   return root
+}
+
+/**
+ * Build a local-remote fixture and register it for cleanup.
+ * @param options - default branch name.
+ * @returns the fixture, removed after the test.
+ */
+async function remoteRepo(options: Parameters<typeof remoteFixture>[0] = {}): Promise<RemoteFixture> {
+  const fixture = await remoteFixture(options)
+  roots.push(fixture.root)
+  return fixture
 }
 
 /** Register one temp non-repository directory for cleanup. */
@@ -110,6 +131,16 @@ async function failureOf(operation: () => Promise<unknown>): Promise<WorktreeTog
     throw error
   }
   throw new Error('expected the operation to reject')
+}
+
+/**
+ * Narrow a prepare result to the copy the call actually created.
+ * @param prepared - the prepare value under test.
+ * @returns the created branch of the result union.
+ */
+function created(prepared: PrepareValue): Extract<PrepareValue, { state: 'created' }> {
+  if (prepared.state !== 'created') throw new Error(`expected a created copy, got ${prepared.state}`)
+  return prepared
 }
 
 /**
@@ -481,5 +512,170 @@ describe('worktree toggle discard', () => {
     expect(invalid.code).toBe('worktree-name-invalid')
     expect((await stat(prepared.worktree.path)).isDirectory()).toBe(true)
     expect(await git(root, 'branch', '--list', prepared.worktree.branch)).toContain(prepared.worktree.name)
+  })
+})
+
+describe('worktree copy base point', () => {
+  it('bases a fresh copy on the fetched remote tip, not the stale local HEAD', async () => {
+    const remote = await remoteRepo()
+    const { ctx, agent, toggle } = await fixture(remote.clone)
+
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
+
+    expect(prepared.base).toEqual({ kind: 'remote', branch: remote.branch })
+    expect(await git(prepared.worktree.path, 'rev-parse', 'HEAD')).toBe(remote.ahead)
+    expect(await git(remote.clone, 'rev-parse', 'HEAD')).toBe(remote.behind)
+    expect(await git(remote.clone, 'rev-parse', 'refs/remotes/origin/main')).toBe(remote.ahead)
+    expect(ctx.workingDirectory.get(agent.session)).toBe(prepared.worktree.path)
+  })
+
+  it('falls back to local HEAD when the remote default branch cannot be fetched', async () => {
+    const remote = await remoteRepo()
+    await git(remote.clone, 'remote', 'set-url', 'origin', 'file:///nonexistent/dsh-worktree-origin.git')
+    const { agent, toggle } = await fixture(remote.clone)
+
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
+
+    expect(prepared.base).toEqual({ kind: 'fallback' })
+    expect(await git(prepared.worktree.path, 'rev-parse', 'HEAD')).toBe(remote.behind)
+    expect(await git(remote.clone, 'rev-parse', 'refs/remotes/origin/main')).toBe(remote.behind)
+  })
+
+  it('bases a head copy on the local checkout without touching the network', async () => {
+    const remote = await remoteRepo()
+    const { agent, toggle } = await fixture(remote.clone, remote.clone, true, 'head')
+
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
+
+    expect(prepared.base).toEqual({ kind: 'head' })
+    expect(await git(prepared.worktree.path, 'rev-parse', 'HEAD')).toBe(remote.behind)
+    // A fetch would have moved origin/main to the remote tip.
+    expect(await git(remote.clone, 'rev-parse', 'refs/remotes/origin/main')).toBe(remote.behind)
+  })
+
+  it('starts silently from local HEAD when the repository has no origin', async () => {
+    const root = await repo()
+    const { agent, toggle } = await fixture(root)
+
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
+
+    expect(prepared.base).toEqual({ kind: 'head' })
+    expect(await git(prepared.worktree.path, 'rev-parse', 'HEAD'))
+      .toBe(await git(root, 'rev-parse', 'HEAD'))
+  })
+
+  it('resolves main when the clone lost origin/HEAD', async () => {
+    const remote = await remoteRepo()
+    await git(remote.clone, 'symbolic-ref', '--delete', 'refs/remotes/origin/HEAD')
+    const { agent, toggle } = await fixture(remote.clone)
+
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
+
+    expect(prepared.base).toEqual({ kind: 'remote', branch: remote.branch })
+    expect(await git(prepared.worktree.path, 'rev-parse', 'HEAD')).toBe(remote.ahead)
+  })
+
+  it('resolves master when origin/HEAD is gone and the default branch is master', async () => {
+    const remote = await remoteRepo({ branch: 'master' })
+    await git(remote.clone, 'symbolic-ref', '--delete', 'refs/remotes/origin/HEAD')
+    const { agent, toggle } = await fixture(remote.clone)
+
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
+
+    expect(prepared.base).toEqual({ kind: 'remote', branch: 'master' })
+    expect(await git(prepared.worktree.path, 'rev-parse', 'HEAD')).toBe(remote.ahead)
+  })
+
+  it('honours origin/HEAD when the default branch is not main', async () => {
+    const remote = await remoteRepo({ branch: 'develop' })
+    const { agent, toggle } = await fixture(remote.clone)
+
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
+
+    expect(prepared.base).toEqual({ kind: 'remote', branch: remote.branch })
+    expect(await git(prepared.worktree.path, 'rev-parse', 'HEAD')).toBe(remote.ahead)
+  })
+
+  it('fetches only the default branch and drags in no tags', async () => {
+    const remote = await remoteRepo()
+    const seed = join(remote.root, 'seed')
+    await git(seed, 'branch', 'feature')
+    await git(seed, 'tag', 'v1')
+    await git(seed, 'push', 'origin', 'feature')
+    await git(seed, 'push', 'origin', 'v1')
+    const { agent, toggle } = await fixture(remote.clone)
+
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
+
+    expect(prepared.base).toEqual({ kind: 'remote', branch: remote.branch })
+    expect(await git(remote.clone, 'rev-parse', 'refs/remotes/origin/main')).toBe(remote.ahead)
+    expect(await git(remote.clone, 'tag', '--list')).toBe('')
+    await expect(
+      git(remote.clone, 'rev-parse', '--verify', '--quiet', 'refs/remotes/origin/feature'),
+    ).rejects.toThrow()
+  })
+
+  it('does not fetch for status', async () => {
+    const remote = await remoteRepo()
+    const { agent, toggle } = await fixture(remote.clone)
+
+    const status = await toggle.status({ sessionId: agent.id })
+
+    expect(status).toMatchObject({ supported: true, sessionWorktree: null })
+    expect(await git(remote.clone, 'rev-parse', 'refs/remotes/origin/main')).toBe(remote.behind)
+  })
+
+  it('does not fetch for release', async () => {
+    const remote = await remoteRepo()
+    const seed = join(remote.root, 'seed')
+    const { agent, toggle } = await fixture(remote.clone)
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
+    await writeFile(join(seed, 'tracked.txt'), 'further\n')
+    await git(seed, 'commit', '-am', 'further')
+    await git(seed, 'push', 'origin', 'main')
+    const further = await git(seed, 'rev-parse', 'HEAD')
+
+    await toggle.release({ sessionId: agent.id })
+
+    expect(await git(remote.clone, 'rev-parse', 'refs/remotes/origin/main')).toBe(remote.ahead)
+    expect(further).not.toBe(remote.ahead)
+    await expect(stat(prepared.worktree.path)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('does not fetch for discard', async () => {
+    const remote = await remoteRepo()
+    const seed = join(remote.root, 'seed')
+    const { agent, toggle } = await fixture(remote.clone)
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
+    await writeFile(join(seed, 'tracked.txt'), 'further\n')
+    await git(seed, 'commit', '-am', 'further')
+    await git(seed, 'push', 'origin', 'main')
+    const further = await git(seed, 'rev-parse', 'HEAD')
+
+    await toggle.discard({ path: remote.clone, name: prepared.worktree.name })
+
+    expect(await git(remote.clone, 'rev-parse', 'refs/remotes/origin/main')).toBe(remote.ahead)
+    expect(further).not.toBe(remote.ahead)
+  })
+
+  it('does not fetch for a session that already runs in a copy', async () => {
+    const remote = await remoteRepo()
+    const seed = join(remote.root, 'seed')
+    const { agent, toggle } = await fixture(remote.clone)
+    const first = created(await toggle.prepare({ sessionId: agent.id }))
+    expect(first.base).toEqual({ kind: 'remote', branch: remote.branch })
+    await writeFile(join(seed, 'tracked.txt'), 'further\n')
+    await git(seed, 'commit', '-am', 'further')
+    await git(seed, 'push', 'origin', 'main')
+    const further = await git(seed, 'rev-parse', 'HEAD')
+
+    const second = await toggle.prepare({ sessionId: agent.id })
+
+    expect(second.state).toBe('existing')
+    expect(second).not.toHaveProperty('base')
+    expect(second.worktree).toEqual(first.worktree)
+    // A fetch on the second call would have moved origin/main to `further`.
+    expect(await git(remote.clone, 'rev-parse', 'refs/remotes/origin/main')).toBe(remote.ahead)
+    expect(further).not.toBe(remote.ahead)
   })
 })

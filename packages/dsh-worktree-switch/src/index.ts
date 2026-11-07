@@ -20,6 +20,7 @@ import { installSourceCheckoutGuard } from './host/guard.ts'
 import { createWorktreeToggle, detectSessionScope } from './host/handlers.ts'
 import { registerWorktreeRoutes } from './host/routes.ts'
 import { installWorktreeScope, SessionScopeRegistry } from './host/scope.ts'
+import type { BaseRef } from './types.ts'
 
 /** Plugin id: package name, bundle row id, browser module id. */
 export const name = 'dsh-worktree-switch'
@@ -32,12 +33,16 @@ export const name = 'dsh-worktree-switch'
  */
 export const inject = ['agents', 'connection', 'subprocess', 'worktrees', 'workingDirectory']
 
+export type { BaseRef } from './types.ts'
+
 /** Row config accepted from `cordis.patch.yml`. */
 export interface Config {
   /** Default for a project the user has never switched either way. */
   defaultEnabled: boolean
   /** Refuse shell commands that run Git against the project checkout while the session is in a copy. */
   guardSourceCheckout: boolean
+  /** Commit a new copy starts from: the fetched remote default branch, or local HEAD. */
+  baseRef: BaseRef
 }
 
 /** Schemastery schema for {@link Config}. */
@@ -48,6 +53,11 @@ export const Config: Schema<Config> = Schema.object({
   guardSourceCheckout: Schema.boolean()
     .default(true)
     .description('While a session is in a copy, deny shell commands that run Git against the project checkout.'),
+  baseRef: Schema.union([Schema.const('fresh'), Schema.const('head')])
+    .default('fresh')
+    .description(
+      "Where a new copy starts: 'fresh' fetches origin's default branch first; 'head' starts at local HEAD without network access.",
+    ),
 })
 
 /**
@@ -59,6 +69,7 @@ export function apply(ctx: Context, config: Config): void {
   const scopes = new SessionScopeRegistry()
   const toggle = createWorktreeToggle(ctx, {
     defaultEnabled: config.defaultEnabled,
+    baseRef: config.baseRef,
     onScope: (sessionId, scope) => {
       if (scope === null) scopes.forget(sessionId)
       else scopes.remember(sessionId, scope)

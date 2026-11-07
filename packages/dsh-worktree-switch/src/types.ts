@@ -7,6 +7,9 @@
  * @module dsh-worktree-switch/types
  */
 
+/** The two configured base points: fetch the remote default branch, or use local HEAD. */
+export type BaseRef = 'fresh' | 'head'
+
 /** One existing copy, as both halves name it. */
 export interface WorktreeRef {
   /** Name, branch and directory segment; all three are this one string. */
@@ -36,14 +39,40 @@ export type StatusValue =
     readonly defaultEnabled: boolean
   }
 
-/** The result of turning the switch on. */
-export type PrepareValue = {
-  /** Whether this call created the copy or found the session already in one. */
-  readonly state: 'created' | 'existing'
-  readonly worktree: WorktreeRef
-  readonly repositoryRoot: string
-  readonly sourceDirty: number
-}
+/** Where a newly created copy's base commit came from. */
+export type PrepareBase =
+  /**
+   * `origin`'s default branch was fetched and the copy starts at its tip.
+   * `branch` is the branch name without the `origin/` prefix.
+   */
+  | { readonly kind: 'remote'; readonly branch: string }
+  /** The local HEAD was used deliberately (`baseRef: 'head'`) or because there was no remote default branch. */
+  | { readonly kind: 'head' }
+  /** A remote default branch existed, but fetching it failed; the local HEAD was used instead. */
+  | { readonly kind: 'fallback' }
+
+/**
+ * The result of turning the switch on.
+ *
+ * `base` exists only on a result that actually created the copy: an existing
+ * copy was built by an earlier call (or by hand), so this plugin cannot say
+ * where its base came from.
+ */
+export type PrepareValue =
+  | {
+    readonly state: 'created'
+    readonly worktree: WorktreeRef
+    readonly repositoryRoot: string
+    readonly sourceDirty: number
+    /** Where the copy's base commit came from. */
+    readonly base: PrepareBase
+  }
+  | {
+    readonly state: 'existing'
+    readonly worktree: WorktreeRef
+    readonly repositoryRoot: string
+    readonly sourceDirty: number
+  }
 
 /** A session's confirmed copy, as the host-side scope hint reads it. */
 export interface SessionScope {

@@ -65,3 +65,21 @@ _Avoid_: 规则文件、配置文件、hooks 配置
 **Layer**（层）:
 一个 hook 文件所属的来源类别——`user`、`project` 或 `local`。三层全部叠加，不做覆盖。
 _Avoid_: 来源、优先级、文件
+
+## Worktree 副本（worktree switch）
+
+**Worktree copy**（副本）:
+开关把会话放进去的那份 linked Git worktree：独立的工作目录与分支，和主检出（源）共享
+同一个 Git 目录。它隔离的是提交与未提交改动，不是写权限。
+_Avoid_: 沙箱、工作树空间、分支目录
+
+**Pool**（池）:
+存放副本的目录，默认 `<项目根>/.dsh/worktrees`，位置由 worktree 服务的 `directory` 决定；
+池里的每个子目录就是一份副本。
+_Avoid_: 工作树根、worktree 目录（作为领域词）
+
+**Base point**（基点）:
+新建副本从其开始的提交：`origin` 默认分支在创建前 fetch 到的尖端（`fresh`，默认），
+或源检出的本地 `HEAD`（`head`，以及任何 fetch 回退）。配置里这个选项的键叫 `baseRef`、
+取值 `fresh` / `head`；`baseRef` 是格式 token，不是领域术语，文档里仍称基点。
+_Avoid_: 起点、基线、base ref（作为领域词；配置键 `baseRef` 除外）
