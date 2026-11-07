@@ -1,6 +1,6 @@
 {
   "name": "dsh-worktree-switch",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "A New Session switch that puts the conversation into a throwaway Git worktree under the project's worktree pool (`<project>/.dsh/worktrees` by default), plus a panel to inspect and discard the copies.",
   "keywords": [
     "dsh",
