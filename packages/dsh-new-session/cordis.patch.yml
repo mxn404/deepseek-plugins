@@ -1,0 +1,15 @@
+# The configuration layer this bundle contributes to a dsh profile. The row
+# `name` must match the package name in package.json; the host Loader imports
+# that specifier and starts the plugin's main entry.
+#
+# This package has no host-side capability: the `/new` command is a browser
+# contribution. The row exists so the Loader owns the package lifecycle, which
+# is also what makes the client-module scanner publish `lib/client.js` to the
+# Web GUI.
+#
+# Later layers win per row id, and a patch replaces a row's whole `config`
+# value instead of merging keys. Users can therefore override this row from
+# `$DSH_HOME/profiles/<name>/cordis.patch.yml` without touching this package.
+- insert:
+    - id: dsh-new-session
+      name: 'dsh-new-session'

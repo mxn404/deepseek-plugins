@@ -41,6 +41,7 @@ deepseek-plugins/
 | `dsh-path-rules` | 仅宿主 | 按路径生效的 `.dsh/rules/` 规则；agent 碰到范围内的文件才注入对应约定 |
 | `dsh-worktree-switch` | 宿主 + 浏览器 | 把会话放进 Git worktree 的开关、面板与侧边栏入口 |
 | `dsh-lifecycle-hooks` | 仅宿主 | 用户 / 项目 / 本地三层的 `.dsh/hooks.json` 生命周期钩子：拦截/审批工具、改写结果、注入上下文、继续停下的 turn |
+| `dsh-new-session` | 宿主 + 浏览器 | 输入 `/new` 直接开一个新会话；命令是浏览器半的 action，宿主半只负责挂载并发布浏览器 bundle |
 
 `dsh-path-rules` 与 `dsh-lifecycle-hooks` 没有浏览器半：没有 `src/client/`、`dsh.client`
 与 `exports["./client"]`，`tsdown.config.ts` 也只跑 `hostConfig()`。
