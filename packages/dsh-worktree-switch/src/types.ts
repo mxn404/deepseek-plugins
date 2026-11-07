@@ -181,9 +181,11 @@ export type ListValue =
     /** Generated-name branches with no checkout, oldest last. */
     readonly orphans: readonly OrphanBranch[]
     /**
-     * Kept copies this host instance left on disk and that still exist here.
-     * A host restart forgets them; the panel then counts leftovers only, which
-     * is the honest floor.
+     * Kept copies this host instance left on disk that have content (or whose
+     * deletion failed), and that still exist here. A copy left only because
+     * another session owns it is not a kept copy and is not counted: the panel
+     * and the sidebar are for this host's own leftovers. A host restart forgets
+     * the set; the panel then counts leftovers only, which is the honest floor.
      */
     readonly keptCopies: number
   }

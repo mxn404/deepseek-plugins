@@ -1021,4 +1021,25 @@ describe('kept copies', () => {
 
     expect(supportedList(await toggle.list({ path: root })).keptCopies).toBe(0)
   })
+
+  it('leaves a copy another session owns without counting it as kept', async () => {
+    const root = await repo()
+    const { ctx, agent, toggle } = await fixture(root)
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
+    // A fresh conversation inherited the copy from the one that owns it, which
+    // is what `/new` does when the project default is off.
+    const inheritor = testAgent(ctx, root, 'worktree-switch-inheritor')
+    await ctx.workingDirectory.set(inheritor, prepared.worktree.path)
+    const before = supportedList(await toggle.list({ path: root })).keptCopies
+
+    const released = await toggle.release({ sessionId: inheritor.id })
+
+    expect(released.directory).toBe(root)
+    expect(released.removed).toBeNull()
+    expect(released.kept).toMatchObject({ name: prepared.worktree.name })
+    expect(released.keptReason).toBe('not-owned')
+    expect(released.error).toBeUndefined()
+    expect((await stat(prepared.worktree.path)).isDirectory()).toBe(true)
+    expect(supportedList(await toggle.list({ path: root })).keptCopies).toBe(before)
+  })
 })

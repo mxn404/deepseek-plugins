@@ -389,9 +389,12 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
   /** One in-flight preparation per session, so a double mount cannot create twice. */
   const pending = new Map<string, Promise<PrepareValue>>()
   /**
-   * Copies this host instance kept when the switch was turned off, by
-   * repository root. A host restart forgets them; the panel's count then
-   * honestly drops back to leftovers only.
+   * Copies this host instance kept when the switch was turned off because they
+   * had content (or because deleting them failed), by repository root. A copy
+   * left only because another session owns it is not one of these: it is still
+   * listed as a copy, but it is not this host's leftover to clean up. A host
+   * restart forgets the set; the panel's count then honestly drops back to
+   * leftovers only.
    */
   const keptCopies = new Map<string, Set<string>>()
 
@@ -800,7 +803,9 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
     }
     options.onScope?.(request.sessionId, null)
     const keepCopy = (reason: KeptReason, error?: string): ReleaseValue => {
-      keep(root, item.name)
+      // Only copies with content are cleanup the sidebar should count. A copy
+      // kept because another session owns it is not a leftover of this host.
+      if (reason === 'dirty') keep(root, item.name)
       return error === undefined
         ? { directory, removed: null, kept: copy, keptReason: reason }
         : { directory, removed: null, kept: copy, keptReason: reason, error }
