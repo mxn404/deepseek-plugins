@@ -11,7 +11,7 @@ import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createHooksFixture } from './support/fixture.ts'
-import { requestText, textResponse } from './support/harness.ts'
+import { describeBash, requestText, textResponse } from './support/harness.ts'
 import {
   commandHook,
   hook,
@@ -48,7 +48,7 @@ function continueRecords(records: readonly Record<string, unknown>[]): Record<st
   return records.filter(record => record.action === 'continue')
 }
 
-describe('a command hook on turn.stop', () => {
+describeBash('a command hook on turn.stop', () => {
   it('continues a turn whose tests failed, and the model sees why', async () => {
     const root = await fixture.repo()
     // The hook runs a real failing process, then asks for another step only on
@@ -172,7 +172,7 @@ describe('the turn.stop loop guard', () => {
   })
 })
 
-describe('a normal stop', () => {
+describeBash('a normal stop', () => {
   it('does not steer when the turn.stop hook reports no action', async () => {
     const root = await fixture.repo()
     await writeHookScript(root, '.dsh/hooks/silent.mjs', nodeScript(''))
@@ -196,7 +196,7 @@ describe('a normal stop', () => {
   })
 })
 
-describe('several continue hooks on one stop', () => {
+describeBash('several continue hooks on one stop', () => {
   it('merges into exactly one steer message', async () => {
     const root = await fixture.repo()
     const stopsOnFirstStop = `
@@ -234,7 +234,7 @@ emit({ action: 'continue', reason: 'the second hook says run the suite again' })
   })
 })
 
-describe('an action turn.stop does not support', () => {
+describeBash('an action turn.stop does not support', () => {
   it('warns about halt, ignores it, and lets the turn end', async () => {
     const root = await fixture.repo()
     await writeHookScript(root, '.dsh/hooks/halt.mjs', nodeScript(`

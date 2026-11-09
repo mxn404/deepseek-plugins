@@ -55,6 +55,20 @@ describe('session start', () => {
     expect(first).not.toContain('Repository rule index')
   })
 
+  it('discovers a rule file whose extension casing is not lowercase', async () => {
+    const root = await fixture.repo()
+    await writeFileIn(root, '.dsh/rules/README.MD', '# Upper case\n\nEXTENSION-CASE-PROBE\n')
+    const harness = await fixture.harness(root)
+    const adapter = harness.registerAdapter('mock', [textResponse('done')])
+    const agent = await harness.createAgent('mock')
+
+    await runTurn(agent)
+
+    const first = requestText(adapter.requests[0]!)
+    expect(first).toContain('EXTENSION-CASE-PROBE')
+    expect(first).toContain('Source: .dsh/rules/README.MD')
+  })
+
   it('lists a path-scoped rule in the index without injecting its body', async () => {
     const root = await fixture.repo()
     await writeFileIn(root, '.dsh/rules/web.md', scopedRule('src/**', 'PATH-SCOPED-PROBE', '# Web rules'))

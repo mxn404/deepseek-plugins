@@ -14,6 +14,8 @@
 import { realpath } from 'node:fs/promises'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-subprocess'
+import { hostPlatform, nullDevice } from './platform.ts'
+import type { HostPlatform } from './platform.ts'
 
 /** Whole-command deadline for one Git call. */
 export const GIT_TIMEOUT_MS = 20_000
@@ -66,6 +68,51 @@ export interface GitOptions {
   readonly timeoutMs?: number | undefined
 }
 
+/** One fully-formed Git invocation: executable plus fixed config, and the clean environment. */
+export interface GitInvocation {
+  /** Executable, then the fixed config, then the caller's arguments. */
+  readonly argv: readonly string[]
+  /** Environment for the child, with inherited repository selectors removed. */
+  readonly env: NodeJS.ProcessEnv
+}
+
+/**
+ * Build the argv and environment every plugin Git call uses.
+ *
+ * The fixed part is not decoration. `core.hooksPath` pointed at the OS null
+ * device keeps a user's hooks from running behind a UI click; `core.fsmonitor`
+ * is off so no daemon needs spawning; `core.longpaths` lets native Windows
+ * create and remove the deep paths a copy can reach (a no-op elsewhere); and
+ * `GIT_OPTIONAL_LOCKS=0` stops a background `git status` from taking
+ * `.git/index.lock` while the user's own Git process holds it.
+ * @param program - resolved Git executable.
+ * @param args - arguments after the executable.
+ * @param platform - platform whose null device applies; defaults to the host's.
+ * @returns the complete argv and the sanitized environment.
+ */
+export function gitInvocation(
+  program: string,
+  args: readonly string[],
+  platform: HostPlatform = hostPlatform(),
+): GitInvocation {
+  return {
+    argv: [
+      program,
+      '-c', `core.hooksPath=${nullDevice(platform)}`,
+      '-c', 'core.fsmonitor=false',
+      '-c', 'core.longpaths=true',
+      ...args,
+    ],
+    env: {
+      ...GIT_ENV,
+      GIT_OPTIONAL_LOCKS: '0',
+      GIT_TERMINAL_PROMPT: '0',
+      GIT_LFS_SKIP_SMUDGE: '1',
+      GIT_NO_LAZY_FETCH: '1',
+    },
+  }
+}
+
 /**
  * Run one Git command without a shell and await its termination.
  * @param ctx - Host context carrying the subprocess provider.
@@ -85,16 +132,11 @@ export async function runGit(
   const signal = options.signal === undefined ? deadline : AbortSignal.any([options.signal, deadline])
   const allowed = options.allowedExitCodes ?? [0]
   const program = await ctx.subprocess.resolveExecutable('git', undefined, signal)
-  const argv = [program, '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', ...args]
+  const { argv, env } = gitInvocation(program, args)
   const child = ctx.subprocess.spawn({
     argv,
     cwd,
-    env: {
-      ...GIT_ENV,
-      GIT_TERMINAL_PROMPT: '0',
-      GIT_LFS_SKIP_SMUDGE: '1',
-      GIT_NO_LAZY_FETCH: '1',
-    },
+    env,
     signal,
     graceMs: 1_500,
     stdio: {

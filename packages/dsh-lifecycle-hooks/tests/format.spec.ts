@@ -39,6 +39,14 @@ describe('the hooks file schema', () => {
     expect(parsed.warnings).toEqual([])
   })
 
+  it('strips a leading byte-order mark before parsing', () => {
+    // Windows editors and `Set-Content -Encoding UTF8` may hand the parser a
+    // BOM-prefixed string; the mark is an encoding artifact, not JSON content.
+    const parsed = hooksOf(`\uFEFF${JSON.stringify({ version: 1, hooks: [] })}`)
+    expect(parsed.hooks).toEqual([])
+    expect(parsed.warnings).toEqual([])
+  })
+
   it('rejects text that is not JSON, naming the problem', () => {
     const parsed = parseHooks('{ "version": 1, "hooks": [', DEFAULTS)
     expect(parsed.ok).toBe(false)
@@ -304,6 +312,35 @@ describe('the hooks file schema', () => {
       timeoutMs: 60_000,
       onFailure: 'open',
     })
+  })
+
+  it.each([
+    ['a lower-case .mjs path', '.dsh/hooks/gate.mjs'],
+    ['an upper-case .MJS path', '.dsh/hooks/gate.MJS'],
+    ['a mixed-case .Js path', '.dsh/hooks/gate.Js'],
+    ['an upper-case .JS path', '.dsh/hooks/gate.JS'],
+  ])('accepts a module with %s', (_label, path) => {
+    // Windows file systems are case-insensitive, so an editor or a rename can
+    // hand over any casing; the extension check must not depend on it.
+    const parsed = hooksOf(JSON.stringify({
+      version: 1,
+      hooks: [{ id: 'gate', on: 'tool.pre', run: { type: 'module', path } }],
+    }))
+    expect(parsed.warnings).toEqual([])
+    expect(parsed.hooks[0]?.run).toEqual({ type: 'module', path, async: false })
+  })
+
+  it.each([
+    ['a lower-case .ts path', '.dsh/hooks/gate.ts'],
+    ['an upper-case .TS path', '.dsh/hooks/gate.TS'],
+    ['a mixed-case .Ts path', '.dsh/hooks/gate.Ts'],
+  ])('rejects a module with %s', (_label, path) => {
+    const parsed = hooksOf(JSON.stringify({
+      version: 1,
+      hooks: [{ id: 'gate', on: 'tool.pre', run: { type: 'module', path } }],
+    }))
+    expect(parsed.hooks).toEqual([])
+    expect(parsed.warnings[0]).toContain('.mjs or .js')
   })
 
   it('accepts a detached module handler', () => {

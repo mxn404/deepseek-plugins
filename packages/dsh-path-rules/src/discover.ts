@@ -13,10 +13,13 @@
 
 import { readdir, readFile, realpath, stat } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
-import { buildRule, failedRule, orderRules, ruleIdentity, ruleRelativePath, type Rule } from './rule.ts'
+import { buildRule, failedRule, orderRules, ruleIdentity, ruleIdentityKey, ruleRelativePath, type Rule } from './rule.ts'
 
 /** Project-root marker: the nearest ancestor containing it is the project root. */
 const PROJECT_ROOT_MARKER = '.git'
+
+/** Rule files are markdown; the extension casing is whatever the filesystem holds. */
+const MARKDOWN_EXTENSION = /\.md$/i
 
 interface CachedRule {
   mtimeMs: number
@@ -26,9 +29,12 @@ interface CachedRule {
 
 /** One discoverable rule file and the roots that own it. */
 interface RuleFile {
+  /** Display path: exactly where discovery found the file. */
   readonly file: string
   readonly ruleRoot: string
   readonly baseDir: string
+  /** Windows realpath used only for the dedupe identity; `undefined` elsewhere. */
+  readonly canonicalPath: string | undefined
 }
 
 /** One discovery result for a working directory. */
@@ -67,6 +73,17 @@ export interface RuleWorkspaceOptions {
   readonly roots: readonly string[]
   /** Maximum UTF-8 bytes of one rule file. */
   readonly maxBytes: number
+  /**
+   * Whether `paths` globs match case-insensitively. The host passes true on
+   * win32; POSIX stays case-sensitive.
+   */
+  readonly caseInsensitive: boolean
+  /**
+   * Platform that decides Windows-only path semantics: rule identities are
+   * realpath- and case-folded only on win32. Injected so Linux tests can run
+   * the win32 branch; defaults to `process.platform` when omitted.
+   */
+  readonly platform?: NodeJS.Platform
   /** Called once per unusable rule file. */
   readonly onInvalidRule: (rule: Rule) => void
 }
@@ -149,7 +166,7 @@ async function listMarkdownFiles(dir: string, visited: Set<string>): Promise<str
       continue
     }
     if (entry.isFile()) {
-      if (entry.name.endsWith('.md')) files.push(full)
+      if (MARKDOWN_EXTENSION.test(entry.name)) files.push(full)
       continue
     }
     if (entry.isSymbolicLink()) {
@@ -160,7 +177,7 @@ async function listMarkdownFiles(dir: string, visited: Set<string>): Promise<str
         continue
       }
       if (info.isDirectory()) files.push(...await listMarkdownFiles(full, visited))
-      else if (info.isFile() && entry.name.endsWith('.md')) files.push(full)
+      else if (info.isFile() && MARKDOWN_EXTENSION.test(entry.name)) files.push(full)
     }
   }
   return files
@@ -177,17 +194,40 @@ export class RuleWorkspace {
   private readonly cache = new Map<string, CachedRule>()
   private readonly reported = new Set<string>()
 
-  constructor(private readonly options: RuleWorkspaceOptions) {}
+  /** Platform the Windows-only identity semantics are resolved for. */
+  private readonly platform: NodeJS.Platform
+
+  constructor(private readonly options: RuleWorkspaceOptions) {
+    this.platform = options.platform ?? process.platform
+  }
 
   private report(rule: Rule): Rule {
-    if (rule.status !== 'ok' && !this.reported.has(rule.absolutePath)) {
-      this.reported.add(rule.absolutePath)
+    if (rule.status !== 'ok' && !this.reported.has(rule.identityKey)) {
+      this.reported.add(rule.identityKey)
       this.options.onInvalidRule(rule)
     }
     return rule
   }
 
-  private async load(file: string, ruleRoot: string, baseDir: string): Promise<Rule | undefined> {
+  /**
+   * Canonical (realpath) file path for the Windows identity key, where a
+   * case-insensitive filesystem can reach the same file through different
+   * casings. Off win32 no extra filesystem work happens; display paths stay as
+   * discovered.
+   * @param file - discovered absolute rule-file path.
+   * @returns the realpath on win32, or `undefined` elsewhere.
+   */
+  private async canonicalPath(file: string): Promise<string | undefined> {
+    if (this.platform !== 'win32') return undefined
+    try {
+      return await realpath(file)
+    } catch {
+      return undefined
+    }
+  }
+
+  private async load(entry: RuleFile): Promise<Rule | undefined> {
+    const { file, ruleRoot, baseDir } = entry
     let info
     try {
       info = await stat(file)
@@ -199,7 +239,10 @@ export class RuleWorkspace {
     if (cached !== undefined && cached.mtimeMs === info.mtimeMs && cached.size === info.size) {
       return this.report(cached.rule)
     }
-    const identity = ruleIdentity(file, ruleRoot, baseDir)
+    const identity = ruleIdentity(file, ruleRoot, baseDir, {
+      platform: this.platform,
+      ...entry.canonicalPath === undefined ? {} : { canonicalPath: entry.canonicalPath },
+    })
     if (info.size > this.options.maxBytes) {
       const rule = failedRule(
         identity,
@@ -215,7 +258,7 @@ export class RuleWorkspace {
     } catch {
       return undefined
     }
-    const rule = buildRule(identity, content)
+    const rule = buildRule(identity, content, { caseInsensitive: this.options.caseInsensitive })
     this.cache.set(file, { mtimeMs: info.mtimeMs, size: info.size, rule })
     return this.report(rule)
   }
@@ -262,9 +305,11 @@ export class RuleWorkspace {
     for (const { ruleRoot, baseDir } of ruleRoots) {
       const found = await listMarkdownFiles(ruleRoot, new Set())
       for (const file of found) {
-        if (seenFiles.has(file)) continue
-        seenFiles.add(file)
-        files.push({ file, ruleRoot, baseDir })
+        const canonicalPath = await this.canonicalPath(file)
+        const identityKey = ruleIdentityKey(canonicalPath ?? file, this.platform)
+        if (seenFiles.has(identityKey)) continue
+        seenFiles.add(identityKey)
+        files.push({ file, ruleRoot, baseDir, canonicalPath })
       }
     }
     return { projectRoot, files }
@@ -287,9 +332,9 @@ export class RuleWorkspace {
     const cached = this.cache.get(entry.file)
     const validate = request.refresh === 'full'
       || cached === undefined
-      || replayed.has(entry.file)
+      || replayed.has(ruleIdentityKey(entry.canonicalPath ?? entry.file, this.platform))
       || this.isCandidate(cached.rule, touched)
-    if (validate) return this.load(entry.file, entry.ruleRoot, entry.baseDir)
+    if (validate) return this.load(entry)
     // A candidate-less cached rule is reused untouched: no stat, no read.
     return cached.rule
   }

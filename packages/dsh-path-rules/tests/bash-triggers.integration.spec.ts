@@ -8,6 +8,7 @@
 
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  hasBashStack,
   countOccurrences,
   requestText,
   textResponse,
@@ -32,7 +33,10 @@ async function bashHarness(root: string, config: RulesConfigOverrides = {}) {
   return fixture.harness(root, config, { bash: true })
 }
 
-describe('shell single-file read triggers', () => {
+// Native Windows mounts pwsh, not bash, and this repo has no pwsh stack yet;
+// the whole block is reported skipped there instead of failing (or silently
+// passing) on a missing tool.
+describe.skipIf(!hasBashStack)('shell single-file read triggers', () => {
   it.each([
     ['cat', 'cat src/app.ts'],
     ['head', 'head -n 2 src/app.ts'],

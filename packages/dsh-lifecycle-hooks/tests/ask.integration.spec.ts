@@ -13,9 +13,9 @@
 import type {} from '@deepseek-ai/dsh-tools'
 import { access, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, expect, it } from 'vitest'
 import { createHooksFixture } from './support/fixture.ts'
-import { requestText, textResponse, toolCallResponse } from './support/harness.ts'
+import { describeBash, requestText, textResponse, toolCallResponse } from './support/harness.ts'
 import {
   bashToolCall,
   commandHook,
@@ -39,7 +39,7 @@ function ask(reason?: string): Record<string, unknown> {
   return { type: 'builtin', action: 'ask', ...reason === undefined ? {} : { reason } }
 }
 
-describe('a builtin ask on tool.pre', () => {
+describeBash('a builtin ask on tool.pre', () => {
   it('asks the host, then runs the tool once the user allows it once', async () => {
     const root = await fixture.repo()
     await writeHooksFile(root, {
@@ -257,7 +257,7 @@ emit({ context: ['writing files is logged'] })`))
   })
 })
 
-describe('a command hook on tool.pre', () => {
+describeBash('a command hook on tool.pre', () => {
   it('asks with its reason and localized display copy, then runs the tool when allowed', async () => {
     const root = await fixture.repo()
     await writeHookScript(root, '.dsh/hooks/ask.mjs', nodeScript(`
@@ -294,7 +294,7 @@ emit({
   })
 })
 
-describe('an ask outside tool.pre', () => {
+describeBash('an ask outside tool.pre', () => {
   it('is warned about and ignored, so the step proceeds', async () => {
     const root = await fixture.repo()
     await writeFileIn(root, 'note.txt', 'NOTE-CONTENT\n')

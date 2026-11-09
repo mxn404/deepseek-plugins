@@ -12,9 +12,9 @@
 import type { GenerateOptions, ToolResultMessage } from '@deepseek-ai/dsh-llm'
 import { access } from 'node:fs/promises'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, expect, it } from 'vitest'
 import { createHooksFixture } from './support/fixture.ts'
-import { requestText, textResponse, toolCallBatch, toolCallResponse } from './support/harness.ts'
+import { describeBash, requestText, textResponse, toolCallBatch, toolCallResponse } from './support/harness.ts'
 import {
   bashToolCall,
   commandHook,
@@ -43,7 +43,7 @@ function onlyToolResult(request: GenerateOptions): ToolResultMessage {
   return results[0]!
 }
 
-describe('replacing a tool result on tool.post', () => {
+describeBash('replacing a tool result on tool.post', () => {
   it('replaces the model-visible output of a successful call, after the tool ran', async () => {
     const root = await fixture.repo()
     await writeHookScript(root, '.dsh/hooks/redact.mjs', nodeScript(`
@@ -111,7 +111,7 @@ emit({ replace: { text: 'READ FAILED: the hook replaced this failure' } })
   })
 })
 
-describe('blocking a tool result on tool.post', () => {
+describeBash('blocking a tool result on tool.post', () => {
   it('turns the result into an error carrying the feedback, after the tool ran', async () => {
     const root = await fixture.repo()
     await writeHookScript(root, '.dsh/hooks/withhold.mjs', nodeScript(`
@@ -149,7 +149,7 @@ emit({ action: 'block', reason: 'this output is withheld by a redaction hook' })
   })
 })
 
-describe('adding context on tool.post', () => {
+describeBash('adding context on tool.post', () => {
   it('leaves the result readable and ferries the reminder to the next request', async () => {
     const root = await fixture.repo()
     // The script proves the post payload contract too: the tool facts and the
@@ -197,7 +197,7 @@ emit({
   })
 })
 
-describe('merging several tool.post outcomes', () => {
+describeBash('merging several tool.post outcomes', () => {
   it('lets a block win over a replace while keeping every hook’s context', async () => {
     const root = await fixture.repo()
     await writeHookScript(root, '.dsh/hooks/replace.mjs', nodeScript(`
@@ -264,7 +264,7 @@ emit({ replace: { text: 'SECOND-TEXT' } })
   })
 })
 
-describe('a replace the host cannot honour', () => {
+describeBash('a replace the host cannot honour', () => {
   it('rejects a run that tries to replace the canonical value instead of the content', async () => {
     const root = await fixture.repo()
     await writeHookScript(root, '.dsh/hooks/value.mjs', nodeScript(`
@@ -293,7 +293,7 @@ emit({ replace: { value: 42 } })
   })
 })
 
-describe('an action tool.post does not support', () => {
+describeBash('an action tool.post does not support', () => {
   it('warns, ignores the action, and keeps the hook’s context', async () => {
     const root = await fixture.repo()
     await writeHookScript(root, '.dsh/hooks/pre-only.mjs', nodeScript(`
@@ -323,7 +323,7 @@ emit({ action: 'deny', reason: 'deny belongs to tool.pre', context: ['kept altho
   })
 })
 
-describe('a failing tool.post hook', () => {
+describeBash('a failing tool.post hook', () => {
   it('blocks the result when the entry says onFailure: block', async () => {
     const root = await fixture.repo()
     await writeHookScript(root, '.dsh/hooks/slow.mjs', nodeScript(`
@@ -356,7 +356,7 @@ emit({ replace: { text: 'never applied' } })
   })
 })
 
-describe('match on tool.post', () => {
+describeBash('match on tool.post', () => {
   it('selects post hooks by tool arguments, like pre hooks', async () => {
     const root = await fixture.repo()
     await writeHookScript(root, '.dsh/hooks/echo-only.mjs', nodeScript(`
@@ -392,7 +392,7 @@ emit({ replace: { text: 'ONLY-ECHO-REPLACED' } })
   })
 })
 
-describe('builtin tool.post hooks', () => {
+describeBash('builtin tool.post hooks', () => {
   it('replaces the content and injects context from one file', async () => {
     const root = await fixture.repo()
     await writeHooks(root, [
@@ -485,7 +485,7 @@ describe('builtin tool.post hooks', () => {
   })
 })
 
-describe('halting from tool.post', () => {
+describeBash('halting from tool.post', () => {
   it('cancels the turn from a builtin halt action', async () => {
     const root = await fixture.repo()
     await writeHooks(root, [

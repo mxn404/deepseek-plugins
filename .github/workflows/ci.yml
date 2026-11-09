@@ -22,3 +22,51 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm build
       - run: pnpm test
+      - run: pnpm test:scripts
+
+  # Native Windows lane: behaviour on win32 differs in ways the Ubuntu lane
+  # cannot see — the host mounts a `pwsh` tool instead of `bash`, separators,
+  # file locks and BOM-prefixed editor files all change. This job proves the
+  # toolchain (pnpm launch, typecheck, build) and the platform-independent
+  # specs named below (none of them needs a real shell). It names spec files
+  # explicitly instead of running the whole suite:
+  # the integration specs need a real bash stack, and a pwsh test stack is not
+  # available to this repository yet, so on win32 they skip with a documented
+  # reason (see each package's `tests/support/harness.ts`). When that stack
+  # lands, add the integration specs to this job.
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.28.5
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm build
+      - run: pnpm test:scripts
+      - name: dsh-path-rules pure specs
+        run: >-
+          pnpm --filter dsh-path-rules exec vitest run
+          tests/shell-parse.spec.ts tests/pwsh-parse.spec.ts tests/parse-match.spec.ts
+          tests/pwsh-triggers.integration.spec.ts
+      - name: dsh-lifecycle-hooks pure specs
+        run: >-
+          pnpm --filter dsh-lifecycle-hooks exec vitest run
+          tests/format.spec.ts tests/hooks-file.spec.ts tests/command.spec.ts
+          tests/discovery.spec.ts tests/session-step.spec.ts tests/observe.spec.ts
+          tests/audit.spec.ts
+      - name: dsh-worktree-switch pure + client specs
+        run: >-
+          pnpm --filter dsh-worktree-switch exec vitest run
+          tests/guard.spec.ts tests/guard-event.spec.ts tests/config.spec.ts
+          tests/platform.spec.ts tests/copy-containment.spec.ts
+          tests/badge.client.spec.tsx tests/chip.client.spec.tsx
+          tests/notice.client.spec.tsx tests/panel.client.spec.tsx
+      - name: dsh-new-session client specs
+        run: pnpm --filter dsh-new-session exec vitest run tests/new-session.client.spec.ts

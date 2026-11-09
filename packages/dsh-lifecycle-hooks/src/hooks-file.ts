@@ -12,6 +12,12 @@
  *   the last valid snapshot when a newer file no longer parses. A malformed
  *   edit must not disable the rules a developer already had working.
  *
+ * The read path decodes bytes by their byte-order mark before parsing: Windows
+ * editors save `.dsh/hooks.json` as UTF-16 or with a UTF-8 BOM often enough
+ * that treating every file as BOM-less UTF-8 would drop a working layer. No
+ * BOM means UTF-8, and invalid UTF-8 fails to parse into the usual warning
+ * rather than throwing out of the loader.
+ *
  * @module dsh-lifecycle-hooks/hooks-file
  */
 
@@ -110,15 +116,50 @@ interface CacheEntry {
 }
 
 /**
+ * Decode one hooks file's bytes by their byte-order mark.
+ *
+ * A hooks file is JSON text, and Windows editors pick the encoding: Notepad
+ * saves UTF-8 with a BOM, PowerShell 5's `>` redirect saves UTF-16 LE with a
+ * BOM, and some tools save UTF-16 BE. The BOM names the encoding, so it is
+ * consumed rather than left for `JSON.parse` to choke on. No BOM means UTF-8;
+ * invalid bytes decode to replacement characters instead of throwing, which
+ * turns into the ordinary parse warning and keeps the previous valid layer.
+ *
+ * @param bytes - the file's raw content.
+ * @returns the decoded text, without its byte-order mark.
+ */
+function decodeHooksFile(bytes: Uint8Array): string {
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    return Buffer.from(bytes.subarray(3)).toString('utf8')
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
+    return Buffer.from(bytes.subarray(2)).toString('utf16le')
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
+    // Node decodes little-endian UTF-16 only, so the big-endian body is copied
+    // and swapped first. A trailing odd byte is an incomplete code unit and is
+    // dropped: the file is broken anyway, and the decode must not throw.
+    const body = Buffer.from(bytes.subarray(2))
+    const even = body.length % 2 === 0 ? body : body.subarray(0, body.length - 1)
+    even.swap16()
+    return even.toString('utf16le')
+  }
+  return Buffer.from(bytes).toString('utf8')
+}
+
+/**
  * Validate one hooks file's text.
  * @param text - the file's raw content.
  * @param defaultTimeoutMs - timeout for entries without an own `timeoutMs`.
  * @returns the usable hooks plus per-entry warnings, or one file-level error.
  */
 export function parseHooks(text: string, defaultTimeoutMs: number): HooksParse {
+  // A caller may hand over a BOM-prefixed string (a test fixture, or a file
+  // read without the decode step); the mark is an encoding artifact, not JSON.
+  const body = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
   let raw: unknown
   try {
-    raw = JSON.parse(text)
+    raw = JSON.parse(body)
   } catch (error) {
     return { ok: false, error: `hooks file is not valid JSON: ${messageOf(error)}` }
   }
@@ -365,9 +406,10 @@ function parseCommandRun(raw: Record<string, unknown>, event: HookEvent): RunPar
  *
  * The path is validated, not resolved: it is relative to the hooks file that
  * names it, and parsing does not know which file that was. Only `.mjs` and
- * `.js` are accepted — a `.ts` file would need a loader this build does not
- * carry, and silently importing it as JavaScript would fail at run time with a
- * much worse message.
+ * `.js` are accepted, in any casing — Windows file systems are case-insensitive,
+ * so an editor rename may hand over `.MJS`. A `.ts` file would need a loader
+ * this build does not carry, and silently importing it as JavaScript would fail
+ * at run time with a much worse message.
  *
  * An observe-only event forces `async` on, for the same reason a command does:
  * the event has already committed what it reports, so its handler must never
@@ -380,7 +422,7 @@ function parseModuleRun(raw: Record<string, unknown>, event: HookEvent): RunPars
   if (typeof raw.path !== 'string' || raw.path.trim().length === 0) {
     return { error: '"run.path" must be a non-empty string' }
   }
-  const extension = extname(raw.path)
+  const extension = extname(raw.path).toLowerCase()
   if (extension !== '.mjs' && extension !== '.js') {
     return {
       error: '"run.path" must be a .mjs or .js module'
@@ -443,7 +485,7 @@ export class HookSources {
     if (cached !== undefined && cached.stamp === stamp) return cached.snapshot
     let text: string
     try {
-      text = await readFile(source, 'utf8')
+      text = decodeHooksFile(await readFile(source))
     } catch (error) {
       this.warn(source, `hooks file could not be read: ${messageOf(error)}`)
       this.entries.set(source, { stamp, snapshot: cached?.snapshot })

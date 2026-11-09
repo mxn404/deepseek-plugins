@@ -24,6 +24,7 @@ import {
   hasClientHalf,
   isBundlePackage,
   listPackages,
+  pnpmCommand,
   readJson,
 } from './workspace.ts'
 
@@ -45,12 +46,22 @@ if (isBundlePackage(root)) {
 }
 
 console.log('› pnpm -r build')
-const build = spawnSync('pnpm', ['-r', '--workspace-concurrency=4', 'build'], {
+const pnpm = pnpmCommand()
+const build = spawnSync(pnpm.command, ['-r', '--workspace-concurrency=4', 'build'], {
   cwd: REPO_ROOT,
   stdio: 'inherit',
+  shell: pnpm.shell,
 })
+// A spawn that never started has `status === null` and the real reason in
+// `error`; reporting "exit code signal" would hide it.
+if (build.error !== undefined) {
+  console.error(`✗ could not start ${pnpm.command}: ${build.error.message}`)
+  process.exit(1)
+}
 if (build.status !== 0) {
-  console.error(`✗ build failed with exit code ${build.status ?? 'signal'}`)
+  console.error(build.status === null
+    ? '✗ build was killed by a signal'
+    : `✗ build failed with exit code ${build.status}`)
   process.exit(build.status ?? 1)
 }
 

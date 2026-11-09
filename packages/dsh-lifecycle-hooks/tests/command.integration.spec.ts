@@ -13,7 +13,7 @@ import { access, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createHooksFixture } from './support/fixture.ts'
-import { requestText, textResponse, toolCallResponse } from './support/harness.ts'
+import { describeBash, requestText, textResponse, toolCallResponse } from './support/harness.ts'
 import {
   bashToolCall,
   commandHook,
@@ -46,7 +46,7 @@ function reminderText(request: GenerateOptions): string {
     .join('\n')
 }
 
-describe('a command hook on tool.pre', () => {
+describeBash('a command hook on tool.pre', () => {
   it('denies the call, tells the model why, and carries its context to the next request', async () => {
     const root = await fixture.repo()
     await writeFileIn(root, 'target.txt', 'KEEP-ME\n')
@@ -150,7 +150,7 @@ emit({
   })
 })
 
-describe('a failing command hook', () => {
+describeBash('a failing command hook', () => {
   /** A script that would finish far too late, so a short timeout is observable. */
   const SLOW = nodeScript(`
 await new Promise(resolve => setTimeout(resolve, 5000))
@@ -281,7 +281,7 @@ process.stdout.write('not a json outcome')
   })
 })
 
-describe('several command hooks', () => {
+describeBash('several command hooks', () => {
   it('runs them in configuration order and applies the denial over the context', async () => {
     const root = await fixture.repo()
     await writeFileIn(root, 'target.txt', 'KEEP-ME\n')
@@ -362,7 +362,7 @@ emit({ action: 'deny', reason: 'the late hook denies' })
   })
 })
 
-describe('a detached command hook', () => {
+describeBash('a detached command hook', () => {
   it('never decides the event, while its side effect still happens and is audited', async () => {
     const root = await fixture.repo()
     await writeHookScript(root, '.dsh/hooks/notify.mjs', nodeScript(`
@@ -466,7 +466,7 @@ describe('a command hook in a deployment without a shell', () => {
   })
 })
 
-describe('a command hook naming an action the event does not support', () => {
+describeBash('a command hook naming an action the event does not support', () => {
   it('warns, ignores the action, and lets the tool run', async () => {
     const root = await fixture.repo()
     // `block` applies to a tool result, never to a call before it runs.

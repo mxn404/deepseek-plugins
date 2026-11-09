@@ -7,8 +7,10 @@
  * unrelated rule.
  */
 
+import { isAbsolute } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { parseSingleFileReadCommand } from '../src/shell.ts'
+import { shellReadPath } from '../src/shell-tools.ts'
 
 describe('parseSingleFileReadCommand', () => {
   it.each([
@@ -108,5 +110,58 @@ describe('parseSingleFileReadCommand', () => {
     ['cat a flag after the file', 'cat src/app.ts -n'],
   ])('rejects %s', (_name, command) => {
     expect(parseSingleFileReadCommand(command)).toBeUndefined()
+  })
+})
+
+/** The win32 lane runs this spec too: exact expectations are POSIX-only there. */
+const IS_WIN32 = process.platform === 'win32'
+
+/**
+ * Assert one resolved read path.
+ *
+ * POSIX compares the exact expected absolute path. On win32 `node:path.resolve`
+ * can spell the same location with the current drive, so the Windows lane pins
+ * the absolute form and the separator-normalized tail instead of recomputing
+ * the resolution the code performs.
+ */
+function expectResolvedPath(actual: string | undefined, posixExpectedPath: string): void {
+  expect(actual).toBeDefined()
+  if (actual === undefined) return
+  expect(isAbsolute(actual)).toBe(true)
+  if (IS_WIN32) {
+    expect(actual.replaceAll('\\', '/').endsWith(posixExpectedPath)).toBe(true)
+    return
+  }
+  expect(actual).toBe(posixExpectedPath)
+}
+
+describe('shellReadPath', () => {
+  it.each([
+    ['bash `cat`', 'bash', { command: 'cat src/app.ts' }, '/repo/src/app.ts'],
+    ['bash with a relative workdir', 'bash', { command: 'cat app.ts', workdir: 'src' }, '/repo/src/app.ts'],
+    ['bash with an absolute workdir', 'bash', { command: 'cat app.ts', workdir: '/srv/app' }, '/srv/app/app.ts'],
+    ['bash with a blank workdir', 'bash', { command: 'cat src/app.ts', workdir: '  ' }, '/repo/src/app.ts'],
+    ['pwsh `Get-Content`', 'pwsh', { command: 'Get-Content src/app.ts' }, '/repo/src/app.ts'],
+    ['pwsh alias with -Path and a relative workdir', 'pwsh', { command: 'gc -Path app.ts', workdir: 'src' }, '/repo/src/app.ts'],
+    ['pwsh absolute operand', 'pwsh', { command: 'type -LiteralPath /repo/src/app.ts' }, '/repo/src/app.ts'],
+  ])('resolves %s against the session directory', (_name, tool, args, expected) => {
+    expectResolvedPath(shellReadPath(tool, args, '/repo'), expected)
+  })
+
+  it.each([
+    ['a non-shell tool', 'read', { file_path: 'src/app.ts' }],
+    ['an unrelated tool', 'run_code', { command: 'cat src/app.ts' }],
+    ['bash with an unprovable command', 'bash', { command: 'cat src/app.ts | head -n 1' }],
+    ['pwsh with an unprovable command', 'pwsh', { command: 'Get-Content src/*.ts' }],
+    ['pwsh with two files', 'pwsh', { command: 'Get-Content src/a.ts src/b.ts' }],
+    ['bash with a pwsh-only command', 'bash', { command: 'Get-Content src/app.ts' }],
+    ['pwsh with a bash-only command', 'pwsh', { command: 'head -n 2 src/app.ts' }],
+    ['non-object arguments', 'bash', 'cat src/app.ts'],
+    ['null arguments', 'bash', null],
+    ['missing arguments', 'bash', undefined],
+    ['missing command', 'bash', { workdir: 'src' }],
+    ['a non-string command', 'bash', { command: 42 }],
+  ])('returns undefined for %s', (_name, tool, args) => {
+    expect(shellReadPath(tool, args, '/repo')).toBeUndefined()
   })
 })

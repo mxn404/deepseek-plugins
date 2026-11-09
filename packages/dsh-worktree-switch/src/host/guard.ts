@@ -14,21 +14,27 @@
  * explicit `workdir` or as a literal absolute path in the command text.
  * `cd ..`-style relative escapes and shell variables are not resolved; the
  * guard is a net, not the sandbox boundary.
+ *
+ * Both shell tools the host can mount are covered: `bash` on POSIX and `pwsh`
+ * on native Windows. The decision is a pure function of the call plus an
+ * explicit platform, so the Windows table is tested on Linux.
  * @module dsh-worktree-switch/host/guard
  */
 
-import { isAbsolute, resolve } from 'node:path'
+import { posix, win32 } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
 import type { SessionScope } from '../types.ts'
 import { contains } from './paths.ts'
+import { hostPlatform } from './platform.ts'
+import type { HostPlatform } from './platform.ts'
 import type { SessionScopeRegistry } from './scope.ts'
 
 /** Tool names whose `command` argument is executed by a shell. */
-const SHELL_TOOLS = new Set(['bash'])
+const SHELL_TOOLS: ReadonlySet<string> = new Set(['bash', 'pwsh'])
 
 /** The arguments the guard reads from one shell call. */
-interface ShellArguments {
+export interface ShellCall {
   /** Command text as the model wrote it. */
   readonly command: string
   /** Explicit working directory, when the call carried one. */
@@ -37,16 +43,20 @@ interface ShellArguments {
 
 /**
  * Read a shell call's command and explicit directory, if this is one.
- * @param exec - the pending tool call.
+ *
+ * The two shell tools take the same argument names; the platform decides which
+ * of them the host mounts, not which fields the guard reads.
+ * @param toolName - the pending tool's name.
+ * @param args - that call's arguments, as the model supplied them.
  * @returns the fields the guard needs, or null for every other tool.
  */
-function shellArguments(exec: ToolExecution): ShellArguments | null {
-  if (!SHELL_TOOLS.has(exec.name)) return null
-  if (exec.arguments === null || typeof exec.arguments !== 'object') return null
-  const args = exec.arguments as Record<string, unknown>
-  const command = args['command']
+export function shellCall(toolName: string, args: unknown): ShellCall | null {
+  if (!SHELL_TOOLS.has(toolName)) return null
+  if (args === null || typeof args !== 'object') return null
+  const values = args as Record<string, unknown>
+  const command = values['command']
   if (typeof command !== 'string' || command.trim() === '') return null
-  const workdir = args['workdir']
+  const workdir = values['workdir']
   const explicit = typeof workdir === 'string' && workdir.trim() !== '' ? workdir : undefined
   return explicit === undefined ? { command } : { command, workdir: explicit }
 }
@@ -57,6 +67,8 @@ function shellArguments(exec: ToolExecution): ShellArguments | null {
  * @param workdir - explicit working directory, when the call carried one.
  * @param cwd - the session's committed working directory.
  * @param scope - the copy the session runs in.
+ * @param platform - path dialect used by the command and directories; defaults
+ * to the host's, and is passed explicitly by the Windows decision table.
  * @returns the denial reason, or null when the call may run.
  */
 export function sourceCheckoutDenial(
@@ -64,20 +76,49 @@ export function sourceCheckoutDenial(
   workdir: string | undefined,
   cwd: string,
   scope: SessionScope,
+  platform: HostPlatform = hostPlatform(),
 ): string | null {
   // Non-Git commands are out of scope: this guard is about the checkout's Git
-  // state, not about every write the sandbox already allows.
-  if (!/\bgit\b/.test(command)) return null
+  // state, not about every write the sandbox already allows. The token is
+  // matched the way the host's shell matches it: case-insensitively on win32
+  // (where `Git` and `GIT.EXE` are the same executable), case-sensitively on
+  // POSIX (where they are different programs).
+  if (!mentionsGit(command, platform)) return null
   const checkout = scope.worktree.path
   const project = scope.repositoryRoot
   if (workdir !== undefined) {
-    const target = isAbsolute(workdir) ? workdir : resolve(cwd, workdir)
-    if (contains(project, target) && !contains(checkout, target)) return denial(scope)
+    const api = platform === 'win32' ? win32 : posix
+    const target = api.isAbsolute(workdir) ? workdir : api.resolve(cwd, workdir)
+    if (contains(project, target, platform) && !contains(checkout, target, platform)) return denial(scope)
   }
   // The copy lives inside the project, so mention of the copy path must not
   // count as naming the checkout; strip it before looking for the project.
-  if (command.split(checkout).join('').includes(project)) return denial(scope)
+  // Windows accepts either separator and any case for the same directory, so
+  // both sides are folded first. POSIX text is untouched: there a backslash is
+  // an escape, not a separator, and the existing literal comparison stands.
+  const remaining = foldPathText(command, platform).split(foldPathText(checkout, platform)).join('')
+  if (remaining.includes(foldPathText(project, platform))) return denial(scope)
   return null
+}
+
+/**
+ * Whether a command text names the Git executable.
+ * @param command - shell command text as the model wrote it.
+ * @param platform - the host's command-name dialect.
+ * @returns true when the text carries a `git` token.
+ */
+function mentionsGit(command: string, platform: HostPlatform): boolean {
+  return platform === 'win32' ? /\bgit\b/i.test(command) : /\bgit\b/.test(command)
+}
+
+/**
+ * Fold the spellings Windows treats as the same path.
+ * @param text - a command or a path, as it was written.
+ * @param platform - the host's path dialect.
+ * @returns lowercased forward-slash text on win32; the input unchanged on POSIX.
+ */
+function foldPathText(text: string, platform: HostPlatform): string {
+  return platform === 'win32' ? text.replaceAll('\\', '/').toLowerCase() : text
 }
 
 /** The one explanation every denial carries, including the way to get main. */
@@ -100,7 +141,7 @@ export function installSourceCheckoutGuard(ctx: Context, registry: SessionScopeR
     if (agent === undefined) return next()
     const scope = registry.get(String(agent.session.id))
     if (scope === null) return next()
-    const args = shellArguments(exec)
+    const args = shellCall(exec.name, exec.arguments)
     if (args === null) return next()
     const denial = sourceCheckoutDenial(args.command, args.workdir, ctx.workingDirectory.get(agent.session), scope)
     return denial === null ? next() : { kind: 'deny', reason: denial }

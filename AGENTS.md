@@ -31,7 +31,8 @@ pnpm install        # 新增包后必须重跑，让 lockfile 收录
 pnpm typecheck      # 各包 tsc --noEmit
 pnpm build          # 构建全部包 + 校验 exports / bundle patch 文件存在
 pnpm test           # 各包 vitest run
-pnpm check          # typecheck + build + test
+pnpm test:scripts   # scripts/ 里的纯函数单测（node --test）
+pnpm check          # typecheck + build + test + test:scripts
 pnpm market         # 生成 site/index.json：已发布包走 npm 源，未发布包走 git 源（须已提交）
 ```
 
@@ -55,6 +56,11 @@ pnpm market         # 生成 site/index.json：已发布包走 npm 源，未发�
 2. 新插件能在 dev profile 里 `--dump-config` 看到自己的层。
 3. 若改了 `package.json` 的 `dsh.bundle` / `dsh.client` / `exports`，同步更新
    `scripts/build.ts` 的校验预期与 README 的目录说明。
+4. Windows 相关改动不依赖真 Windows 才能测：平台语义（工具名、路径方言、大小写、`NUL`
+   选择）做成纯函数入参，Linux CI 覆盖；`windows-latest` lane 覆盖 install / typecheck /
+   build / 纯函数与客户端 spec。文件锁、MAX_PATH 这类真实 OS 语义在 Windows 集成 harness
+   落地前只是**文档化限制**，不要声称已被 CI 覆盖；缺工具时显式 skip 并写明原因，不要
+   静默通过。
 
 ## Agent skills
 

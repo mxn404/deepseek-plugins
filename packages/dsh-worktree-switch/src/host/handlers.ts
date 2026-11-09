@@ -9,8 +9,9 @@
  * @module dsh-worktree-switch/host/handlers
  */
 
-import { lstat, stat } from 'node:fs/promises'
-import { basename, dirname, isAbsolute, relative, resolve } from 'node:path'
+import { chmod, lstat, readdir, rm, stat } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { setTimeout as sleep } from 'node:timers/promises'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
@@ -55,6 +56,12 @@ import { contains } from './paths.ts'
 /** Attempts at a fresh name before a creation failure becomes an error. */
 const CREATE_ATTEMPTS = 3
 
+/** Attempts at removing one clean copy before the failure is reported. */
+const REMOVE_ATTEMPTS = 3
+
+/** Delay before the second and third removal attempt; the first is immediate. */
+const REMOVE_RETRY_DELAYS_MS: readonly number[] = [100, 250]
+
 export type {
   CopyRef,
   DiscardBranchValue,
@@ -86,6 +93,181 @@ export class WorktreeToggleError extends Error {
     super(message)
     this.name = 'WorktreeToggleError'
   }
+}
+
+/** How one refused checkout removal should be followed up. */
+export type RemoveFailureKind = 'retryable' | 'fatal'
+
+/**
+ * Failure signatures a second attempt can survive: another process still holds
+ * a file open, a read-only entry blocks the recursive delete, or a directory
+ * could not be emptied on the first pass.
+ *
+ * Everything else is reported as-is. In particular a dirty checkout Git
+ * refused and a locked worktree are signatures of a state a retry cannot
+ * change, so they stay fatal.
+ */
+const RETRYABLE_REMOVE_SIGNATURES: readonly RegExp[] = [
+  /permission denied/i,
+  /\bEACCES\b/i,
+  /\bEBUSY\b/i,
+  /\bEPERM\b/i,
+  /\bENOTEMPTY\b/i,
+  /device or resource busy/i,
+  /is in use/i,
+  /being used by another process/i,
+  /read-only/i,
+  /access is denied/i,
+]
+
+/**
+ * Classify one failed `git worktree remove` result.
+ *
+ * Only the error text carries the signature; the exit status does not (Git
+ * uses 128 for many different refusals and other values for I/O failures).
+ * @param result - the command's captured outcome.
+ * @returns whether the removal is worth retrying.
+ */
+export function classifyRemoveFailure(result: GitResult): RemoveFailureKind {
+  const detail = `${result.stderr}\n${result.stdout}`
+  return RETRYABLE_REMOVE_SIGNATURES.some(signature => signature.test(detail)) ? 'retryable' : 'fatal'
+}
+
+/**
+ * Whether one removal attempt reported that Git's registration is already gone.
+ *
+ * `git worktree remove` deletes the admin directory before it deletes the
+ * checkout directory, so a failure in the second phase leaves a directory no
+ * `worktree remove` can target any more.
+ */
+const NOT_A_WORKING_TREE = /is not a working tree/i
+
+/**
+ * Best-effort clear of the read-only bits in one directory tree.
+ *
+ * Native Windows refuses to unlink a file that another process holds open or
+ * that carries the read-only attribute, and Git's recursive delete stops at the
+ * first such entry. Clearing the bits is what a person would do by hand; this
+ * walks the whole copy only on the retry path, and swallows every failure
+ * because the retry reports the real reason.
+ * @param path - directory to walk; a missing path is already the goal.
+ */
+async function clearReadOnlyBits(path: string): Promise<void> {
+  let info
+  try {
+    info = await lstat(path)
+  } catch {
+    return
+  }
+  if (info.isSymbolicLink()) return
+  try {
+    await chmod(path, info.isDirectory() ? 0o755 : 0o644)
+  } catch {
+    // Best effort: the retry below reports the real reason if this was it.
+  }
+  if (!info.isDirectory()) return
+  let entries
+  try {
+    entries = await readdir(path)
+  } catch {
+    return
+  }
+  await Promise.all(entries.map(entry => clearReadOnlyBits(join(path, entry))))
+}
+
+/**
+ * Run one `git worktree remove`, keeping a refused status as a result.
+ * @param ctx - host context carrying the subprocess provider.
+ * @param root - canonical repository root.
+ * @param path - checkout directory to remove.
+ * @param signal - caller cancellation.
+ * @returns the captured outcome; cancellation and spawn failures still throw.
+ */
+async function tryRemoveWorktree(
+  ctx: Context,
+  root: string,
+  path: string,
+  signal?: AbortSignal,
+): Promise<GitResult> {
+  try {
+    return await runGit(ctx, root, ['worktree', 'remove', path], { signal })
+  } catch (error) {
+    if (error instanceof GitFailure) return error.result
+    throw error
+  }
+}
+
+/**
+ * Whether a filesystem error just means the path is already gone.
+ * @param error - the thrown value.
+ * @returns true for `ENOENT`.
+ */
+function isMissing(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException).code === 'ENOENT'
+}
+
+/**
+ * Remove one clean checkout, retrying only the failures a second attempt can fix.
+ *
+ * The dirty guard ran before this: a checkout with content is never retried,
+ * never force-removed, and Git's own validation would refuse it besides. What
+ * can change between attempts is an open handle or a read-only entry, so those
+ * are cleared and retried a bounded number of times. When Git already dropped
+ * the registration and only the directory is left, the retry finishes that
+ * directory instead of reporting a removal that never completed.
+ * @param ctx - host context carrying the subprocess provider.
+ * @param root - canonical repository root.
+ * @param path - checkout directory to remove.
+ * @param name - copy name, for the error details.
+ * @param signal - caller cancellation.
+ * @throws {WorktreeToggleError} with `worktree-remove-failed` and the real reason.
+ */
+async function removeCheckout(
+  ctx: Context,
+  root: string,
+  path: string,
+  name: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  let last: GitResult | undefined
+  let lastLeftover: unknown
+  let attempts = 0
+  while (attempts < REMOVE_ATTEMPTS) {
+    if (attempts > 0) {
+      await clearReadOnlyBits(path)
+      await sleep(REMOVE_RETRY_DELAYS_MS[attempts - 1] ?? 0, undefined, signal === undefined ? {} : { signal })
+    }
+    attempts += 1
+    const result = await tryRemoveWorktree(ctx, root, path, signal)
+    if (result.exitCode === 0) return
+    last = result
+    const detail = `${result.stderr}\n${result.stdout}`
+    if (attempts > 1 && NOT_A_WORKING_TREE.test(detail)) {
+      // Git already removed its registration before failing on the directory,
+      // so the retry can only finish the leftover checkout.
+      try {
+        await rm(path, { recursive: true })
+        return
+      } catch (error) {
+        if (isMissing(error)) return
+        lastLeftover = error
+        // The leftover got a distinct failure instead of a removal refusal;
+        // the next attempt retries that filesystem operation, not Git's.
+        continue
+      }
+    }
+    if (classifyRemoveFailure(result) === 'fatal') break
+  }
+  const reasons: string[] = []
+  if (last !== undefined) reasons.push(new GitFailure(['worktree', 'remove', path], last).message)
+  if (lastLeftover !== undefined) {
+    reasons.push(`the leftover checkout could not be removed: ${lastLeftover instanceof Error ? lastLeftover.message : String(lastLeftover)}`)
+  }
+  throw new WorktreeToggleError(
+    'worktree-remove-failed',
+    reasons.join('; '),
+    { name, path, attempts },
+  )
 }
 
 /** Row config the verbs read. */
@@ -694,17 +876,7 @@ export function createWorktreeToggle(ctx: Context, options: WorktreeToggleOption
       if (item.branch !== null) await deleteBranchByRef(root, item.branch, signal)
       await runGit(ctx, root, ['worktree', 'prune'], { signal })
     } else {
-      const removed = await runGit(ctx, root, ['worktree', 'remove', item.path], {
-        signal,
-        allowedExitCodes: [0, 128],
-      })
-      if (removed.exitCode !== 0) {
-        throw new WorktreeToggleError(
-          'worktree-remove-failed',
-          new GitFailure(['worktree', 'remove', item.path], removed).message,
-          { name: item.name, path: item.path },
-        )
-      }
+      await removeCheckout(ctx, root, item.path, item.name, signal)
       if (item.branch !== null) await deleteBranch(root, item.branch, signal)
     }
     forget(root, item.name)

@@ -18,9 +18,9 @@
 import type { GenerateOptions, ToolResultMessage } from '@deepseek-ai/dsh-llm'
 import { basename, join } from 'node:path'
 import { readFile } from 'node:fs/promises'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, expect, it } from 'vitest'
 import { createHooksFixture } from './support/fixture.ts'
-import { requestText, textResponse } from './support/harness.ts'
+import { describeBash, requestText, textResponse } from './support/harness.ts'
 import {
   bashToolCall,
   denyFile,
@@ -40,7 +40,7 @@ function onlyToolResult(request: GenerateOptions): ToolResultMessage {
   return results[0]!
 }
 
-describe('a child agent under one root-mounted plugin', () => {
+describeBash('a child agent under one root-mounted plugin', () => {
   it('denies the child bash call by the child cwd rule and audits it on the child session', async () => {
     const parentRoot = await fixture.repo()
     const childRoot = await fixture.repo()

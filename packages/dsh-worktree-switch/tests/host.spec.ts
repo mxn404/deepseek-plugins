@@ -6,7 +6,7 @@
  * session's committed working directory, the four verb payloads, and errors.
  */
 
-import { mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
@@ -523,6 +523,36 @@ describe('worktree toggle discard', () => {
     expect(await worktreePaths(root)).toEqual([root])
     const listed = supportedList(await toggle.list({ path: root }))
     expect(listed.items).toEqual([])
+  })
+
+  it.skipIf(process.platform === 'win32')('clears read-only entries and retries the removal', async () => {
+    // POSIX-only case: on native Windows `chmod` cannot make a directory
+    // undeletable, so the read-only failure this retry depends on is not
+    // reproducible there. The classifier and the bounded retry are covered as
+    // pure decisions in `tests/platform.spec.ts`; the real Windows file-lock
+    // case awaits a Windows integration lane — the current windows job runs
+    // typecheck/build plus pure and client specs only, not this file.
+    const root = await repo()
+    const { agent, toggle } = await fixture(root)
+    const prepared = created(await toggle.prepare({ sessionId: agent.id }))
+    const readonly = join(prepared.worktree.path, 'readonly')
+    await mkdir(readonly)
+    await writeFile(join(readonly, 'tracked.txt'), 'content\n')
+    await git(prepared.worktree.path, 'add', 'readonly/tracked.txt')
+    await git(prepared.worktree.path, 'commit', '-m', 'tracked read-only directory')
+    await chmod(readonly, 0o555)
+
+    const removed = await toggle.discard({ path: root, name: prepared.worktree.name })
+
+    expect(removed).toEqual({
+      removed: true,
+      name: prepared.worktree.name,
+      branch: prepared.worktree.branch,
+      path: prepared.worktree.path,
+    })
+    await expect(stat(prepared.worktree.path)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await git(root, 'branch', '--list', prepared.worktree.branch)).toBe('')
+    expect(await worktreePaths(root)).toEqual([root])
   })
 
   it('rejects an unknown copy and an invalid name', async () => {
