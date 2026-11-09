@@ -1,6 +1,6 @@
 {
   "name": "dsh-path-rules",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Path-scoped repository rules: markdown conventions under .dsh/rules load into the agent's context when it touches a matching file.",
   "keywords": [
     "dsh",

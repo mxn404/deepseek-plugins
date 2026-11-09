@@ -1,7 +1,0 @@
----
-"dsh-path-rules": patch
----
-
-Windows support: recognise the `pwsh` shell tool as well as `bash`, and trigger path rules from a conservative PowerShell single-file read (`Get-Content` and its `gc` / `cat` / `type` aliases, `-Path` / `-LiteralPath` or one positional file; pipes, wildcards, variables, redirection and multi-file shapes stay untriggered). `paths` globs now normalise backslashes to `/`, `.md` discovery and glob matching are case-insensitive on Windows, and rule dedupe folds the Windows path case while display paths stay as discovered.
-
-POSIX 上既有的 `/` glob 写法与大小写敏感匹配保持不变；反斜杠归一化与扩展名大小写不敏感是这次显式放宽的跨平台行为。
