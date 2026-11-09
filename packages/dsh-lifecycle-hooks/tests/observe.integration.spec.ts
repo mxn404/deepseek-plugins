@@ -13,9 +13,9 @@
 
 import { access, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, expect, it } from 'vitest'
 import { createHooksFixture } from './support/fixture.ts'
-import { requestText, textResponse } from './support/harness.ts'
+import { describeBash, requestText, textResponse } from './support/harness.ts'
 import {
   bashToolCall,
   commandHook,
@@ -61,7 +61,7 @@ function contentText(content: unknown): string {
     .join('\n')
 }
 
-describe('observing a final tool result on tool.result', () => {
+describeBash('observing a final tool result on tool.result', () => {
   it('runs after the result is final, cannot rewrite it, and records the run', async () => {
     const root = await fixture.repo()
     // The observer records the exact payload it was handed, then tries to
@@ -114,7 +114,7 @@ emit({ replace: { text: 'OBSERVER REWROTE THIS' } })
   })
 })
 
-describe('observing session end on session.end', () => {
+describeBash('observing session end on session.end', () => {
   it('runs after the agent is disposed, without blocking disposal, and records the turn', async () => {
     const root = await fixture.repo()
     await writeHookScript(root, '.dsh/hooks/on-end.mjs', nodeScript(`
@@ -163,7 +163,7 @@ writeFileSync('session-end.json', JSON.stringify(payload))
   })
 })
 
-describe('deriving notifications from approval asks and agent errors', () => {
+describeBash('deriving notifications from approval asks and agent errors', () => {
   it('notifies asynchronously when the host appends approval/asked', async () => {
     const root = await fixture.repo()
     await writeHookScript(root, '.dsh/hooks/notify.mjs', nodeScript(`
@@ -251,7 +251,7 @@ writeFileSync('error-notification.json', JSON.stringify(payload))
   })
 })
 
-describe('failure containment and silence', () => {
+describeBash('failure containment and silence', () => {
   it('contains a failing observer: the agent proceeds and the failure is recorded and warned', async () => {
     const root = await fixture.repo()
     await writeHookScript(root, '.dsh/hooks/broken.mjs', nodeScript(`

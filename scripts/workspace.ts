@@ -135,3 +135,28 @@ export async function listPackages() {
   }
   return packages
 }
+
+/** The executable and spawn mode that run one pnpm subcommand on a platform. */
+export interface PnpmCommand {
+  /** Executable name handed to `spawnSync`. */
+  readonly command: string
+  /** Whether the executable needs a shell (npm-installed shims on Windows do). */
+  readonly shell: boolean
+}
+
+/**
+ * Pick how to start pnpm on one platform.
+ *
+ * npm-installed pnpm on Windows is a `.cmd` shim, which `spawnSync` cannot
+ * execute directly: without a shell the spawn fails with `EINVAL`/`ENOENT`
+ * before pnpm ever runs. Everywhere else pnpm is a normal executable and a
+ * shell would only add quoting trouble.
+ *
+ * @param platform - Node platform name; defaults to the running platform.
+ * @returns the executable name and whether to spawn through a shell.
+ */
+export function pnpmCommand(platform: NodeJS.Platform = process.platform): PnpmCommand {
+  return platform === 'win32'
+    ? { command: 'pnpm.cmd', shell: true }
+    : { command: 'pnpm', shell: false }
+}

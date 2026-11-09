@@ -34,6 +34,39 @@ declare module '@deepseek-ai/dsh-session-projection/types' {
   }
 }
 
+/**
+ * Fold one path's separators for comparison.
+ *
+ * Hand-written instead of `node:path`: this runs in the page bundle, which has
+ * no Node import surface. Trailing separators are dropped so a copy path listed
+ * with one still matches.
+ * @param path - absolute path as the host or the session reported it.
+ * @returns the path with `\` folded to `/` and no trailing separator.
+ */
+function foldSeparators(path: string): string {
+  let folded = path.replaceAll('\\', '/')
+  while (folded.length > 1 && folded.endsWith('/')) folded = folded.slice(0, -1)
+  return folded
+}
+
+/**
+ * Whether a session's working directory is one listed copy or lives below it.
+ *
+ * The host lists copy paths in its own spelling; a session inside the copy (or
+ * a subdirectory of it) reports the same directory with whatever separator the
+ * platform uses. Normalizing both sides is what makes the "current copy"
+ * highlight work on Windows too, without changing POSIX comparisons.
+ * @param copyPath - the copy path the panel listed.
+ * @param directory - the session's committed working directory.
+ * @returns true when the directory is the copy itself or a descendant.
+ */
+export function isInsideCopy(copyPath: string, directory: string): boolean {
+  const base = foldSeparators(copyPath)
+  const target = foldSeparators(directory)
+  if (base === '' || target === '') return false
+  return target === base || target.startsWith(`${base}/`)
+}
+
 /** Which of the switch's six faces is showing. */
 export type TogglePhase = 'checking' | 'off' | 'creating' | 'reverting' | 'ready' | 'failed' | 'disabled'
 
@@ -979,7 +1012,7 @@ export class PanelController {
       if (typeof directory !== 'string' || directory === '') continue
       for (const group of groups) {
         for (const item of group.items) {
-          if (directory === item.path || directory.startsWith(`${item.path}/`)) found.add(item.path)
+          if (isInsideCopy(item.path, directory)) found.add(item.path)
         }
       }
     }

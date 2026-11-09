@@ -21,6 +21,7 @@ import * as ToolBash from '@deepseek-ai/dsh-tool-bash'
 import * as ToolFs from '@deepseek-ai/dsh-tool-fs'
 import * as ToolJobs from '@deepseek-ai/dsh-tool-jobs'
 import { Context as CordisContext } from '@deepseek-ai/cordis'
+import { defineContentToolFixture } from '@deepseek-ai/dsh-tool-testkit'
 import { vi } from 'vitest'
 import * as DshRules from '../../src/index.ts'
 import { MockAdapter } from './mock-adapter.ts'
@@ -36,10 +37,22 @@ export interface RulesHarness {
   createAgent(route: string, cwd?: string): Promise<Agent>
 }
 
+/**
+ * Whether this machine can mount the real bash tool stack.
+ *
+ * Native Windows mounts `tool-pwsh` instead, and this repository has no pwsh
+ * stack to mount here yet. A block that drives a real shell must skip itself
+ * with this flag (`describe.skipIf(!hasBashStack)`) and state the reason; asking
+ * the harness for the bash stack anyway is a bug and throws below.
+ */
+export const hasBashStack = process.platform !== 'win32'
+
 /** Optional real-service stacks a test wants mounted next to the plugin. */
 export interface RulesHarnessOptions {
-  /** Mount the real bash tool stack (jobs, subprocess, shell env, executor, tool). */
+  /** Mount the real bash tool stack (jobs, subprocess, shell env, executor, tool). POSIX only. */
   readonly bash?: boolean
+  /** Mount a test-only `pwsh` tool that reports success without running a shell. */
+  readonly pwsh?: boolean
 }
 
 /**
@@ -58,12 +71,33 @@ export async function createRulesHarness(
   await mountAgentLoopTestDependencies(ctx, { workingDirectory: true })
   await ctx.plugin(ToolFs)
   if (options.bash === true) {
+    // A block that reached here without skipping has a real bug: there is no
+    // bash tool to call on this platform, so a mounted-but-missing stack would
+    // fail later with a confusing tool-lookup error. Fail here with the fix.
+    if (!hasBashStack) {
+      throw new Error('the real bash tool stack is not available on this platform; gate the block with hasBashStack')
+    }
     await ctx.plugin(LocalJobRegistry)
     await ctx.plugin(ToolJobs)
     await ctx.plugin(LocalSubprocessRuntime)
     await ctx.plugin(BashEnvPlugin, {})
     await ctx.plugin(LocalBashExecutor, { timeoutMs: 20_000 })
     await ctx.plugin(ToolBash)
+  }
+  if (options.pwsh === true) {
+    // A test-only stand-in for dsh's Windows `pwsh` tool. The trigger decision
+    // is pure text, so the command never has to run.
+    ctx.tools.register(defineContentToolFixture({
+      name: 'pwsh',
+      description: 'Run a PowerShell command (test double).',
+      parameters: {
+        command: { type: 'string', required: true, description: 'PowerShell command to run.' },
+        workdir: { type: 'string', description: 'Directory to run the command in.' },
+      },
+      async execute() {
+        return [{ type: 'text', text: 'pwsh test double: command succeeded' }]
+      },
+    }))
   }
   // The Loader/schema supplies every default, so the harness only passes overrides.
   await ctx.plugin(DshRules, config as DshRules.Config)

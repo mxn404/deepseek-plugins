@@ -13,6 +13,7 @@ import { execFile } from 'node:child_process'
 import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry, { AgentModel, modelSelectionProjectionDefinition } from '@deepseek-ai/dsh-agent'
@@ -29,6 +30,7 @@ import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import WorkingDirectoryService from '@deepseek-ai/dsh-working-directory'
+import { nullDevice } from '../src/host/platform.ts'
 
 const execute = promisify(execFile)
 
@@ -55,12 +57,17 @@ const GIT_ENV = {
 
 /**
  * Run one fixture Git command.
+ *
+ * Fixture Git is spawned directly (no shell), which resolves `git.exe` from
+ * PATH on native Windows and the `git` binary elsewhere, so the same helper
+ * works on both. The null device follows the host, exactly as the production
+ * invocation does.
  * @param cwd - directory the command runs in.
  * @param args - arguments after the executable.
  * @returns trimmed stdout.
  */
 export async function git(cwd: string, ...args: string[]): Promise<string> {
-  const result = await execute('git', ['-c', 'core.hooksPath=/dev/null', ...args], { cwd, env: GIT_ENV })
+  const result = await execute('git', ['-c', `core.hooksPath=${nullDevice()}`, ...args], { cwd, env: GIT_ENV })
   return result.stdout.trim()
 }
 
@@ -219,9 +226,12 @@ export async function remoteFixture(
     await writeFile(join(seed, 'tracked.txt'), 'behind\n')
     await git(seed, 'add', 'tracked.txt')
     await git(seed, 'commit', '-m', 'behind')
-    await git(seed, 'remote', 'add', 'origin', `file://${remote}`)
+    // A `file://` URL taken from the OS path is valid on both platforms:
+    // `file:///tmp/...` on POSIX and `file:///C:/...` on native Windows.
+    const remoteUrl = pathToFileURL(remote).href
+    await git(seed, 'remote', 'add', 'origin', remoteUrl)
     await git(seed, 'push', 'origin', branch)
-    await git(root, 'clone', `file://${remote}`, clone)
+    await git(root, 'clone', remoteUrl, clone)
     const behind = await git(clone, 'rev-parse', 'HEAD')
     await writeFile(join(seed, 'tracked.txt'), 'ahead\n')
     await git(seed, 'commit', '-am', 'ahead')

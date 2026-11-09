@@ -19,8 +19,10 @@ export type RuleStatus = 'ok' | 'parse-error' | 'too-large' | 'pattern-error'
 
 /** One discovered rule, ready for rendering and matching. */
 export interface Rule {
-  /** Absolute rule-file path; rule identity. */
+  /** Absolute rule-file path used for display; {@link identityKey} is the dedupe identity. */
   readonly absolutePath: string
+  /** Dedupe/seen-map identity: case-folded on win32; display keeps {@link absolutePath}. */
+  readonly identityKey: string
   /** Absolute rule root that contained the file. */
   readonly ruleRoot: string
   /** Directory `paths` globs resolve against: the rule root's parent. */
@@ -44,10 +46,37 @@ export interface Rule {
 
 /** Stable identity derived from where a rule file lives. */
 export interface RuleIdentity {
+  /** Absolute rule-file path used for display. */
   readonly absolutePath: string
+  /** Dedupe/seen-map identity: case-folded on win32; display keeps {@link absolutePath}. */
+  readonly identityKey: string
   readonly ruleRoot: string
   readonly baseDir: string
   readonly name: string
+}
+
+/**
+ * Key a rule file is deduplicated by: the absolute path, case-folded and
+ * slash-normalized on win32, where the filesystem is case-insensitive. Display
+ * paths stay as written; this key only feeds dedupe and the per-agent seen map.
+ * @param absolutePath - absolute rule-file path, ideally its realpath.
+ * @param platform - platform that decides the folding; defaults to `process.platform`.
+ * @returns the dedupe key; identical to `absolutePath` off win32.
+ */
+export function ruleIdentityKey(absolutePath: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform !== 'win32') return absolutePath
+  return absolutePath.replaceAll('\\', '/').toLowerCase()
+}
+
+/** Options for {@link ruleIdentity}. */
+export interface RuleIdentityOptions {
+  /** Platform that decides identity folding; defaults to `process.platform`. */
+  readonly platform?: NodeJS.Platform
+  /**
+   * Canonical file path used only for {@link RuleIdentity.identityKey} (a
+   * Windows realpath); the display path stays {@link RuleIdentity.absolutePath}.
+   */
+  readonly canonicalPath?: string
 }
 
 /**
@@ -60,13 +89,20 @@ export interface RuleIdentity {
  * @param absolutePath - absolute path of the rule file.
  * @param ruleRoot - absolute rule root that contains it.
  * @param baseDir - directory the rule root name was resolved against.
+ * @param options - identity-folding options; the display path is unaffected.
  * @returns the identity fields shared by usable and failed rules.
  */
-export function ruleIdentity(absolutePath: string, ruleRoot: string, baseDir: string): RuleIdentity {
+export function ruleIdentity(
+  absolutePath: string,
+  ruleRoot: string,
+  baseDir: string,
+  options: RuleIdentityOptions = {},
+): RuleIdentity {
   const insideRoot = relative(ruleRoot, absolutePath)
-  const withoutExtension = insideRoot.endsWith('.md') ? insideRoot.slice(0, -'.md'.length) : insideRoot
+  const withoutExtension = /\.md$/i.test(insideRoot) ? insideRoot.slice(0, -'.md'.length) : insideRoot
   return {
     absolutePath,
+    identityKey: ruleIdentityKey(options.canonicalPath ?? absolutePath, options.platform),
     ruleRoot,
     baseDir: resolve(baseDir),
     name: withoutExtension.split(sep).join('/'),
@@ -267,13 +303,25 @@ export type CompiledGlob =
   | { readonly ok: true; readonly matchers: RegExp[] }
   | { readonly ok: false; readonly reason: string }
 
+/** Options for glob compilation and rule building. */
+export interface CompileGlobOptions {
+  /** Match paths case-insensitively; the Windows platform passes true. */
+  readonly caseInsensitive?: boolean
+}
+
 /**
  * Compile one `paths` glob into regular expressions.
+ *
+ * Globs always use `/` as the separator: backslashes are normalized to `/`
+ * before compiling, so a Windows author's `web\\**` means the same thing as
+ * `web/**` instead of compiling to a literal backslash that never matches.
  * @param pattern - one path glob, relative to the rule root's parent.
+ * @param options - matching policy; POSIX callers omit it and stay case-sensitive.
  * @returns matchers for the expanded pattern, or the reason it fails closed.
  */
-export function compileGlob(pattern: string): CompiledGlob {
-  const normalized = pattern.startsWith('./') ? pattern.slice(2) : pattern
+export function compileGlob(pattern: string, options: CompileGlobOptions = {}): CompiledGlob {
+  const slashPath = pattern.replaceAll('\\', '/')
+  const normalized = slashPath.startsWith('./') ? slashPath.slice(2) : slashPath
   const expanded = expandGlobBraces(normalized)
   if (expanded === undefined) {
     return { ok: false, reason: `\`${pattern}\` expands beyond ${MAX_GLOB_ALTERNATIVES} alternatives` }
@@ -281,7 +329,10 @@ export function compileGlob(pattern: string): CompiledGlob {
   const matchers: RegExp[] = []
   for (const alternative of expanded) {
     try {
-      matchers.push(new RegExp(globToRegexSource(alternative)))
+      matchers.push(new RegExp(
+        globToRegexSource(alternative),
+        options.caseInsensitive === true ? 'i' : undefined,
+      ))
     } catch (error: unknown) {
       return { ok: false, reason: `\`${pattern}\` is not a valid glob: ${error instanceof Error ? error.message : String(error)}` }
     }
@@ -297,9 +348,10 @@ function contentVersion(content: string): string {
  * Build a usable rule from file content.
  * @param identity - location identity of the rule.
  * @param content - raw rule-file content.
+ * @param options - matching policy; POSIX callers omit it and stay case-sensitive.
  * @returns the rule, failed closed when parsing or pattern compilation fails.
  */
-export function buildRule(identity: RuleIdentity, content: string): Rule {
+export function buildRule(identity: RuleIdentity, content: string, options: CompileGlobOptions = {}): Rule {
   const version = contentVersion(content)
   const parsed = parseRuleMarkdown(content)
   if (parsed.status !== 'ok') {
@@ -307,7 +359,7 @@ export function buildRule(identity: RuleIdentity, content: string): Rule {
   }
   const matchers: RegExp[] = []
   for (const pattern of parsed.paths) {
-    const compiled = compileGlob(pattern)
+    const compiled = compileGlob(pattern, options)
     if (!compiled.ok) {
       return {
         ...identity,

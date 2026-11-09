@@ -27,7 +27,7 @@ deepseek-plugins/
 │  ├─ _template/                # 复制即用的插件骨架，不进入市场
 │  └─ dsh-<name>/               # 一个插件 = 一个包
 └─ .github/workflows/
-   ├─ ci.yml                    # typecheck + build + test
+   ├─ ci.yml                    # typecheck + build + test（ubuntu 全量 + windows 便携子集）
    └─ market.yml                # 打 tag 后重建索引并部署 Pages
 ```
 
@@ -45,6 +45,36 @@ deepseek-plugins/
 
 `dsh-path-rules` 与 `dsh-lifecycle-hooks` 没有浏览器半：没有 `src/client/`、`dsh.client`
 与 `exports["./client"]`，`tsdown.config.ts` 也只跑 `hostConfig()`。
+
+## Windows 支持
+
+4 个插件都按原生 Windows（Node win32 + dsh 的 win32 组合）的行为做了适配：CI 有
+`windows-latest` lane，跑 install、typecheck、build、纯函数与客户端 spec。依赖真实 shell
+的集成测试在 Windows 上显式 skip 并说明原因（本仓测试骨架还没有 pwsh 栈）；文件锁、
+MAX_PATH 这类真实 OS 语义目前是文档化限制，等 Windows 集成 harness 落地后再纳入。
+POSIX 上的既有写法与匹配语义保持不变；只有两处**显式放宽**是跨平台生效的——`paths`
+glob 的反斜杠归一化，以及规则文件 / module 扩展名大小写不敏感（POSIX 上原本能用的写法
+仍然可用，见各包 README）。
+
+- **工具名**：宿主在 win32 上挂载 `pwsh`、禁用 `bash`。主检出守卫与路径规则的 shell
+  触发同时识别 `bash` 与 `pwsh`，参数都读 `command` / `workdir`；命令文本按工具方言
+  分派解析，非 git / 非读取命令不触发。
+- **`dsh-path-rules`**：支持保守的 PowerShell 单文件读取——`Get-Content`（别名 `gc` /
+  `cat` / `type`）配 `-Path` / `-LiteralPath` 或一个位置参数；管道、通配符、变量展开、
+  重定向、多文件等证不出「只读了一个文件」的形状一律不触发。`paths` glob 统一按 `/`
+  语义，反斜杠写法会归一化；Windows 上规则匹配与 `.md` 扩展名发现大小写不敏感。
+- **`dsh-lifecycle-hooks`**：读取带 BOM 的 hooks 文件（UTF-8 / UTF-16 LE / BE），
+  Windows 编辑器写出的 `.dsh/hooks.json` 不会被整层丢弃；module 扩展名大小写不敏感。
+  `run.command` 由宿主 shell 执行（Windows 上是 pwsh），`match.tool` 要写宿主实际挂载
+  的工具名。
+- **`dsh-worktree-switch`**：识别盘符与 UNC 路径，面板按分隔符无关方式判定「当前副本」；
+  git 调用不抢 `.git/index.lock` 并启用 `core.longpaths`；副本删除遇文件占用会清只读位
+  后有限重试，仍失败时报出真实原因，且绝不 force 删除有未提交改动的副本。
+- **工具链**：构建脚本用平台正确的 pnpm 启动方式（Windows 上是 `pnpm.cmd`），启动失败
+  会打印真实的 spawn 错误。
+
+已知限制：文件锁重试只能降低失败率、不保证 100%；MAX_PATH 只在 git 侧缓解；Windows
+沙箱/ACL 由宿主负责，插件不改变它。各包 README 的 Windows 节写了细节与 pwsh 写法。
 
 ## 首次使用
 

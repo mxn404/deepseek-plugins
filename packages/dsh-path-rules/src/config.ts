@@ -21,8 +21,9 @@ export interface Config {
   /** Byte budget of the session-start rule index; overflow degrades the index. */
   indexMaxBytes: number
   /**
-   * Whether conservative single-file shell reads count as triggers. Shell
-   * commands whose touched file cannot be proven are never triggers.
+   * Whether conservative single-file shell reads count as triggers, on either
+   * shell tool (`bash` or `pwsh`). Commands whose touched file cannot be proven
+   * are never triggers.
    */
   includeBashReads: boolean
   /**
@@ -49,7 +50,7 @@ export const Config: Schema<Config> = Schema.object({
     .description('Byte budget of the session-start rule index. Overflow drops titles, then paths, then the index itself.'),
   includeBashReads: Schema.boolean()
     .default(true)
-    .description('Treat conservative single-file shell reads as triggers. Unprovable shell shapes never trigger.'),
+    .description('Treat conservative single-file shell reads as triggers on bash and pwsh. Unprovable shell shapes never trigger.'),
   replayAfterCompaction: Schema.boolean()
     .default(true)
     .description('Re-inject previously injected rules on the step after a session compaction.'),

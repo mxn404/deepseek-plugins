@@ -53,8 +53,9 @@
   行）：当前目录是 `<项目>` 的 linked worktree 副本，git 与文件操作在副本里做，主检出是源。
   它会随恢复会话、每次进/出副本重新推导，回到项目目录后自动消失。这是**提示**，不是权限
   边界——真正的写隔离仍取决于沙箱根（见「已知边界」）。
-- **主检出守卫**：会话在副本里时，`tools/pre-execute` 会拦下“把 git 指向主检出”的 bash
-  调用（命令里出现主检出的绝对路径，或 `workdir` 落在主检出里），拒绝原因直接告诉模型
+- **主检出守卫**：会话在副本里时，`tools/pre-execute` 会拦下“把 git 指向主检出”的 shell
+  调用（POSIX 上是 `bash`，原生 Windows 上是 `pwsh`；命令里出现主检出的绝对路径，或
+  `workdir` 落在主检出里），拒绝原因直接告诉模型
   在副本里该怎么做（`git fetch origin main` + `merge`/`rebase`）。这是启发式拦截，不是
   沙箱边界：`cd ..` 之类的相对逃逸、shell 变量展开不在它的覆盖范围内；配置
   `guardSourceCheckout: false` 可关掉。拦下的是 git，主检出里的普通写入仍然由沙箱放行。
@@ -163,7 +164,7 @@ worktree，所以新旧目录的副本都会出现，可以照常丢弃。
 | 字段 | 默认 | 含义 |
 |---|---|---|
 | `defaultEnabled` | `true` | 用户从未在这个项目上拨过开关时，新会话是否默认隔离。用户拨过一次后，按项目记在浏览器 localStorage 里，优于此项。 |
-| `guardSourceCheckout` | `true` | 会话在副本里时，用 `tools/pre-execute` 拒绝把 git 指向主检出的 bash 调用。关掉就只剩提示。 |
+| `guardSourceCheckout` | `true` | 会话在副本里时，用 `tools/pre-execute` 拒绝把 git 指向主检出的 shell 调用（`bash` / `pwsh`）。关掉就只剩提示。 |
 | `baseRef` | `'fresh'` | 创建副本前从 `origin` 拉取默认分支作为基点；`head` 则直接基于本地 HEAD、不联网。 |
 
 ### 创建基点
@@ -217,7 +218,8 @@ worktree，所以新旧目录的副本都会出现，可以照常丢弃。
   定位文件）显示的是源项目根，而不是副本。这是刻意的：沙箱边界与侧边栏归属都依赖它。
 - 沙箱边界仍是源项目根，因此副本不是"写隔离"，它隔离的是**提交与未提交改动**：
   助手在副本里改的文件不会落到源检出的工作树里，但同一会话仍可写源项目根下的文件。
-  主检出守卫只覆盖 bash 里明显指向主检出的 git 调用，是提示之外的兜底，不是权限。
+  主检出守卫只覆盖 shell（`bash` / `pwsh`）里明显指向主检出的 git 调用，是提示之外的
+  兜底，不是权限。
 - 不自动合并、不自动回收、不支持多仓库、不识别旧插件的 `.worktree-space/` 目录。
 - **不追溯旧副本**：升级前留下的副本没有归属标记，离开时按 `not-owned` 保留——只在开关的
   hover 里说明「开关不删这份副本：它不是为这条会话建的」，需要时在面板里手动丢弃。插件
@@ -235,6 +237,58 @@ worktree，所以新旧目录的副本都会出现，可以照常丢弃。
   `rm -rf` 掉副本目录后，标记要等 Git 注册被 prune 才消失，那期间面板会把该行标成
   「目录已丢失」，走同一套清理。
 
+## Windows（原生）
+
+目标是让原生 Windows（dsh 的 win32 组合：宿主挂 `pwsh`、不挂 `bash`）与 Linux 行为
+对齐，POSIX 行为不变。已覆盖：
+
+- **主检出守卫识别 `pwsh`**：`bash` 与 `pwsh` 读同一组参数（`command` / `workdir`）。
+  Windows 上盘符路径（`C:\Users\...`）、UNC 路径（`\\server\share\...`）、正反斜杠
+  混写、大小写差异、带空格与中文的路径都能命中；非 git 命令（`Get-ChildItem`、
+  `Copy-Item`、`Get-Content` 等）照旧放行。
+- **Git 调用适配平台**：null device 按平台选（win32 用 `NUL`，其它用 `/dev/null`）；
+  所有调用带 `-c core.longpaths=true`，并在 Windows 上只对 git 侧缓解 MAX_PATH；
+  `GIT_OPTIONAL_LOCKS=0` 让插件的 `git status` 不抢 `.git/index.lock`，IDE 占着锁时
+  不会排队等 20 秒超时。
+- **丢弃副本重试**：`git worktree remove` 失败时按错误签名分类。文件被短暂占用、只读位
+  挡路、目录暂时删不空这类失败，会清一次只读位并带小退避重试（最多 3 次）；重试仍失败
+  就报 `worktree-remove-failed` 并带上真实原因。锁住的 worktree、有未提交改动的副本不会
+  被重试，更不会 `--force` 删除。
+- **面板「当前副本」高亮**：按分隔符无关的方式比较（`\` 与 `/` 等价），会话在副本的子
+  目录里也能正确高亮。
+- **路径与配置**：带空格/中文的路径可正常开关、创建、离开、丢弃；`baseRef` 等配置语义
+  与 POSIX 相同。
+
+pwsh 下的等价写法（守卫拦的正是「把 git 指向主检出」，下面三条都会被拒绝）：
+
+```powershell
+git -C 'C:\Users\me\项目' pull origin main       # 点名主检出
+Set-Location 'C:\Users\me\项目'; git status       # 先切到主检出再跑
+git --git-dir='C:\Users\me\项目\.git' status
+```
+
+在副本里要把 main 带进来，仍用守卫文案里的两条：
+
+```powershell
+git fetch origin main
+git merge origin/main    # 或 git rebase origin/main
+```
+
+Windows 特有的已知限制：
+
+- **文件锁重试不是 100%**：另一个进程一直占着文件时重试也删不掉；插件报出真实原因，
+  副本留在池里，等占用结束后在面板重试。重试只是在短暂占用下降低失败率，不是保证。
+- **MAX_PATH 只做了 git 侧缓解**：`core.longpaths=true` 让 git 自己的创建/删除能处理长
+  路径，Node 侧的文件操作仍受系统长路径策略约束；系统没开长路径支持时仍可能失败。
+- **沙箱/ACL 是宿主的事**：本插件不改变 dsh 在 Windows 上的沙箱策略。副本隔离的仍是
+  提交与未提交改动，不是写权限（同「已知边界」）。
+- **刻意不支持**：不在 pwsh 上复刻 bash 命令方言、不解析命令里的变量/管道/相对逃逸，
+  也不为 Windows 单独维护一套路径规则——守卫仍是启发式网，不是沙箱边界。
+- **Windows 语义的验证边界**：当前 `windows-latest` lane 跑 install / typecheck / build /
+  纯函数与客户端 spec，所以 `NUL` 选择、工具名、路径方言、大小写这些纯决策在真 Windows
+  上被验证；文件锁与 MAX_PATH 的**真实 OS 集成用例**要等 Windows 集成 harness 落地才会
+  进 lane，在那之前它们只是本节的文档化限制，不是 CI 自动验证。
+
 ## 实现
 
 宿主半（`src/index.ts`）做三件事：拿 `cordis.patch.yml` 挂上的 `ctx.worktrees` 和
@@ -251,7 +305,7 @@ Fetch 路由（`src/host/routes.ts`），说 `client-request` / `server-response
 | `release` | `{ sessionId }` | 把会话切回项目目录；仅在「有归属 + 仍在基点 + 工作区干净」时撤销副本（检出 + 分支），否则保留并返回 `keptReason`（`dirty` / `not-owned`）与原因。只有有内容（`dirty`）的保留，以及删除失败后抛错、副本留在磁盘上的那一次，登记为「宿主保留的副本」；`not-owned` 的离开不登记、不计入清理计数。删除失败抛错，不吞成「保留」 |
 | `scope` | `{ sessionId }` | 轻量回答「这条会话在副本里吗」：先读宿主内存里按会话记录的副本，读不到再对当前目录做一次检测；不读源仓库 status、不切目录 |
 | `list` | `{ path }` | 列出该仓库除主检出外的所有 linked worktree（名字/分支/路径/创建时间/改动数/prunable），外加遗留分支（提交数/最近提交/时间）与本次宿主保留的副本数（有内容与删除失败的保留） |
-| `discard` | `{ path, name }` | 干净才删：`git worktree remove` + `git branch -D`；prunable 行先删分支再 prune；detached 副本只移除检出；改动非空则拒绝 |
+| `discard` | `{ path, name }` | 干净才删：`git worktree remove` + `git branch -D`；prunable 行先删分支再 prune；detached 副本只移除检出；改动非空则拒绝；文件被短暂占用/只读时清只读位并有限重试（见「Windows（原生）」） |
 | `discardBranch` | `{ path, branch }` | 只删一个遗留分支：要求名字是生成格式、且不在任何 checkout 的 HEAD 上；已删过再删也算成功 |
 
 创建走 harness 的 worktree 服务（沿用它的沙箱、filter 覆盖和失败语义）；`status`/`list`/
@@ -271,8 +325,10 @@ pnpm build          # 构建全部包并校验 exports / bundle patch 文件存�
 测试有三条接缝：宿主半的七个动词（真实临时 Git 仓库 + 真实服务，`tests/host.spec.ts`）、
 浏览器半的槽注册与渲染（真实 `SlotRegistry` + 假 `connection`/`conversation`，
 `tests/*.client.spec.tsx`），以及插件公开的配置契约（`tests/config.spec.ts`：`baseRef`
-只接受 `fresh` / `head`）。不断言内部 Git 调用次数，也不测上游 worktree 服务自己的
-Git 细节。
+只接受 `fresh` / `head`）。纯文本决策另有表驱动单测：守卫的 POSIX/Windows 路径表
+（`tests/guard.spec.ts`）、固定 git argv/env 与移除失败分类（`tests/platform.spec.ts`）、
+面板「当前副本」包含判定（`tests/copy-containment.spec.ts`）。不断言内部 Git 调用次数，
+也不测上游 worktree 服务自己的 Git 细节。
 
 浏览器半为什么自带一个 `tests/client-harness.ts` 而不是用官方的
 `@deepseek-ai/dsh-client-test-runtime`：该包 0.2.1-rc.5 发布版会 import

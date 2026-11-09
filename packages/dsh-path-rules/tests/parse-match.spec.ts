@@ -7,7 +7,7 @@
  */
 
 import { readFile } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
@@ -16,6 +16,7 @@ import {
   matchRules,
   parseRuleMarkdown,
   ruleIdentity,
+  ruleIdentityKey,
   type Rule,
 } from '../src/rule.ts'
 
@@ -24,6 +25,11 @@ const REFERENCE_RULES = join(HERE, 'fixtures/reference-rules')
 
 function ruleFromMarkdown(markdown: string, root = '/repo/.dsh/rules', baseDir = '/repo'): Rule {
   return buildRule(ruleIdentity(join(root, 'rule.md'), root, baseDir), markdown)
+}
+
+/** Rule names selected by one match, in result order. */
+function matchedNames(rules: Rule[], touched: string[], cwd = '/repo'): string[] {
+  return matchRules(rules, touched, cwd).map(hit => hit.rule.name)
 }
 
 describe('parseRuleMarkdown', () => {
@@ -83,10 +89,6 @@ describe('parseRuleMarkdown', () => {
 })
 
 describe('matchRules glob semantics', () => {
-  function matchedNames(rules: Rule[], touched: string[], cwd = '/repo'): string[] {
-    return matchRules(rules, touched, cwd).map(hit => hit.rule.name)
-  }
-
   it('reports every triggering file once, sorted, as absolute paths', () => {
     const rule = ruleFromMarkdown('---\npaths: [src/**]\n---\nbody\n')
     const hits = matchRules(
@@ -95,7 +97,18 @@ describe('matchRules glob semantics', () => {
       '/repo',
     )
     expect(hits).toHaveLength(1)
-    expect(hits[0]!.triggeredBy).toEqual(['/repo/src/a.ts', '/repo/src/b.ts'])
+    const triggeredBy = hits[0]!.triggeredBy
+    expect(triggeredBy).toHaveLength(2)
+    if (process.platform === 'win32') {
+      // `node:path.resolve` can spell the same location with the current drive
+      // on win32; pin the absolute form and separator-normalized tail instead
+      // of recomputing the resolution the code performs.
+      expect(triggeredBy.every(path => isAbsolute(path))).toBe(true)
+      expect(triggeredBy[0]!.replaceAll('\\', '/').endsWith('/repo/src/a.ts')).toBe(true)
+      expect(triggeredBy[1]!.replaceAll('\\', '/').endsWith('/repo/src/b.ts')).toBe(true)
+    } else {
+      expect(triggeredBy).toEqual(['/repo/src/a.ts', '/repo/src/b.ts'])
+    }
   })
 
   it('`**` crosses directories and `*` does not', () => {
@@ -236,5 +249,97 @@ describe('reference rules from security_audit_tool', () => {
     const rules = await referenceRules()
     const hit = matchRules([...rules.values()], [join(dirname(REFERENCE_RULES), relativePath)], dirname(REFERENCE_RULES))
     expect(hit.map(entry => entry.rule.name).sort()).toEqual([...expectedNames].sort())
+  })
+})
+
+describe('path glob backslash normalization', () => {
+  function ruleFromPattern(pattern: string): Rule {
+    return ruleFromMarkdown(`---\npaths: [${pattern}]\n---\nbody\n`)
+  }
+
+  it.each([
+    ['a broad backslash glob', 'web\\**', '/repo/web/a.ts'],
+    ['a single-segment backslash glob', 'web\\*.ts', '/repo/web/app.ts'],
+    ['a deep backslash glob', 'web\\**\\*.ts', '/repo/web/deep/app.ts'],
+    ['a dot-prefixed backslash glob', '.\\web\\**', '/repo/web/a.ts'],
+    ['a literal backslash path', 'windows\\src\\*.ts', '/repo/windows/src/app.ts'],
+  ])('normalizes %s before compiling', (_name, pattern, touched) => {
+    const rule = ruleFromPattern(pattern)
+    expect(rule.status, rule.reason).toBe('ok')
+    expect(matchedNames([rule], [touched])).toEqual(['rule'])
+  })
+
+  it.each([
+    ['a broad forward-slash glob', 'web/**', '/repo/web/deep/app.ts'],
+    ['a single-segment forward-slash glob', 'web/*.ts', '/repo/web/app.ts'],
+    ['a mixed forward-slash pattern', 'src/**/*.ts', '/repo/src/deep/app.ts'],
+  ])('keeps the existing `/` semantics for %s', (_name, pattern, touched) => {
+    const rule = ruleFromPattern(pattern)
+    expect(rule.status, rule.reason).toBe('ok')
+    expect(matchedNames([rule], [touched])).toEqual(['rule'])
+  })
+
+  it('does not let a normalized `*` cross directories', () => {
+    const flat = ruleFromPattern('web\\*.ts')
+    expect(matchedNames([flat], ['/repo/web/deep/app.ts'])).toEqual([])
+  })
+})
+
+describe('matchRules case policy', () => {
+  function matched(pattern: string, touched: string, caseInsensitive: boolean): string[] {
+    const rule = buildRule(
+      ruleIdentity('/repo/.dsh/rules/rule.md', '/repo/.dsh/rules', '/repo'),
+      `---\npaths: ["${pattern}"]\n---\nbody\n`,
+      { caseInsensitive },
+    )
+    expect(rule.status, rule.reason).toBe('ok')
+    return matchRules([rule], [touched], '/repo').map(hit => hit.rule.name)
+  }
+
+  it('matches case-insensitively when the option is set (Windows)', () => {
+    expect(matched('src/**', '/repo/SRC/App.TS', true)).toEqual(['rule'])
+    expect(matched('src/App?.TS', '/repo/src/app1.ts', true)).toEqual(['rule'])
+    expect(matched('{src,lib}/**', '/repo/LIB/App.ts', true)).toEqual(['rule'])
+  })
+
+  it('stays case-sensitive by default (POSIX)', () => {
+    expect(matched('src/**', '/repo/SRC/App.TS', false)).toEqual([])
+    expect(matched('src/App?.TS', '/repo/src/app1.ts', false)).toEqual([])
+  })
+
+  it('keeps `compileGlob` case-sensitive unless asked', () => {
+    const sensitive = compileGlob('src/**')
+    const insensitive = compileGlob('src/**', { caseInsensitive: true })
+    expect(sensitive.ok).toBe(true)
+    expect(insensitive.ok).toBe(true)
+    if (!sensitive.ok || !insensitive.ok) return
+    expect(sensitive.matchers[0]?.test('SRC/App.TS')).toBe(false)
+    expect(insensitive.matchers[0]?.test('SRC/App.TS')).toBe(true)
+  })
+})
+
+describe('rule identity normalization', () => {
+  it('keeps POSIX identity equal to the absolute rule path', () => {
+    expect(ruleIdentityKey('/repo/.dsh/rules/web.md', 'linux')).toBe('/repo/.dsh/rules/web.md')
+  })
+
+  it('case-folds and slash-normalizes identity on win32', () => {
+    expect(ruleIdentityKey('C:\\Repo\\.dsh\\rules\\Web.MD', 'win32')).toBe('c:/repo/.dsh/rules/web.md')
+  })
+
+  it('keeps the display path while using a realpath identity on win32', () => {
+    const identity = ruleIdentity(
+      'C:\\Repo\\.dsh\\rules\\README.MD',
+      'C:\\Repo\\.dsh\\rules',
+      'C:\\Repo',
+      { platform: 'win32', canonicalPath: 'C:\\Repo\\.dsh\\rules\\readme.md' },
+    )
+    expect(identity.absolutePath).toBe('C:\\Repo\\.dsh\\rules\\README.MD')
+    expect(identity.identityKey).toBe('c:/repo/.dsh/rules/readme.md')
+  })
+
+  it.each(['README.MD', 'README.Md', 'README.md'])('strips any `.md` casing from the rule name: %s', (name) => {
+    const identity = ruleIdentity(`/repo/.dsh/rules/${name}`, '/repo/.dsh/rules', '/repo')
+    expect(identity.name).toBe('README')
   })
 })

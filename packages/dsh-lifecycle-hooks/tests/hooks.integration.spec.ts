@@ -12,6 +12,7 @@ import { access, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  describeBash,
   requestText,
   textResponse,
   toolCallBatch,
@@ -97,7 +98,7 @@ describe('match.tool', () => {
   })
 })
 
-describe('builtin deny on tool.pre', () => {
+describeBash('builtin deny on tool.pre', () => {
   it('blocks a matching shell command and tells the model why', async () => {
     const root = await fixture.repo()
     await writeFileIn(root, 'target.txt', 'KEEP-ME\n')
@@ -170,7 +171,7 @@ describe('builtin deny on tool.pre', () => {
   })
 })
 
-describe('builtin halt on tool.pre', () => {
+describeBash('builtin halt on tool.pre', () => {
   it('cancels the turn, denies the call, and stops the hooks behind it', async () => {
     const root = await fixture.repo()
     await writeFileIn(root, 'target.txt', 'KEEP-ME\n')

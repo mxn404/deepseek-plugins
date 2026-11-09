@@ -75,6 +75,7 @@ overlay 里这一行的 `name` 要写成插件包的绝对路径，否则从仓�
     {
       "id": "block-rm",
       "on": "tool.pre",
+      // match.tool 要写宿主实际挂载的工具名：POSIX 上是 bash，Windows 上是 pwsh。
       "match": { "tool": "bash", "args": { "command": "/(^|\\s)rm\\s+-rf\\b/" } },
       "run": { "type": "builtin", "action": "deny", "reason": "rm -rf is blocked by .dsh/hooks.json" }
     },
@@ -88,6 +89,7 @@ overlay 里这一行的 `name` 要写成插件包的绝对路径，否则从仓�
     {
       "id": "notify-approval",
       "on": "notification",
+      // run.command 由宿主 shell 执行：POSIX 上是 sh/bash，Windows 上是 pwsh。
       "run": { "type": "command", "command": "notify-send dsh 'an approval is waiting'", "async": true }
     }
   ]
@@ -95,9 +97,15 @@ overlay 里这一行的 `name` 要写成插件包的绝对路径，否则从仓�
 ```
 
 - `block-rm` 命中时工具**不执行**，模型收到的工具结果是 `Error: rm -rf is blocked by .dsh/hooks.json`。
+  上面是 POSIX 写法；Windows 上要把 `match.tool` 换成 `pwsh`，并把命令正则换成 pwsh 的
+  `Remove-Item -Recurse -Force` 形状，见 [Windows](#windows)。
 - `format-after-write` 指向 `.dsh/hooks/format.mjs`（路径相对**声明它的 hooks 文件所在目录**）。
 - `notify-approval` 在每次审批请求或 agent 错误时脱手跑一次，不参与任何决策；审批通知要求
-  该 session 的 agent 仍活着，agent 已销毁的审批请求会被跳过。
+  该 session 的 agent 仍活着，agent 已销毁的审批请求会被跳过。上面是 bash 写法；Windows 的
+  pwsh 写法是 `"command": "New-BurntToastNotification -Text 'dsh', 'an approval is waiting'"`，
+  需要 BurntToast 模块。跨平台请改用 `"node .dsh/hooks/notify.mjs"`，两种 shell 都能起 node。
+- hooks 文件按 BOM 解码：UTF-8（可带 BOM）与 UTF-16 LE/BE（带 BOM）保存的文件都能直接加载，
+  Windows 编辑器不会因为编码把整层丢成 warn，见 [Windows](#windows)。
 
 没有 `.dsh/hooks.json` 的仓库零打扰：不注入消息、不打日志、不写记录。
 
@@ -183,15 +191,17 @@ overlay 里这一行的 `name` 要写成插件包的绝对路径，否则从仓�
 | `hooks[].on` | 是 | 钩子点；本版调度 `session.start` / `step.start` / `tool.pre` / `tool.post` / `tool.result` / `turn.stop` / `session.end` / `notification` |
 | `hooks[].match` | 否 | 省略 = 全匹配；可用维度取决于事件（见[能力矩阵](#事件与能力矩阵)） |
 | `hooks[].run` | 是 | handler；`builtin`、`command` 或 `module` |
-| `hooks[].run.command` | command 必填 | shell 命令行，cwd 是 session 当前目录 |
-| `hooks[].run.path` | module 必填 | 模块路径，相对声明它的 hooks 文件目录；只认 `.mjs` / `.js` |
+| `hooks[].run.command` | command 必填 | shell 命令行，由宿主 shell 执行（Windows 上是 pwsh），cwd 是 session 当前目录 |
+| `hooks[].run.path` | module 必填 | 模块路径，相对声明它的 hooks 文件目录；只认 `.mjs` / `.js`（扩展名大小写不敏感） |
 | `hooks[].run.async` | 否 | `true` 时脱手执行：只做副作用、不参与决策，销毁时中止；`command` 与 `module` 都支持，只观察事件强制为 `true` |
 | `hooks[].timeoutMs` | 否 | 正整数，覆盖行配置的 `defaultTimeoutMs` |
 | `hooks[].onFailure` | 否 | `open`（默认，失败放行）或 `block`（失败按事件合成阻断） |
 
-不认识的字段静默忽略。整份文件坏掉（不是 JSON、没有 `version` / 不是 1、`hooks` 不是数组）
-只跳过该文件并 warn，保留该层上一份有效配置；单条坏 hook（缺 `id`、未知事件、非法 regex、
-事件不支持的 match 维度或 action、`.ts` 模块）只跳过该条并 warn，兄弟条目照常工作。
+hooks 文件按 BOM 解码：UTF-8（可带 BOM）与 UTF-16 LE/BE（带 BOM）保存的文件都能直接加载，
+无 BOM 按 UTF-8，见 [Windows](#windows)。不认识的字段静默忽略。整份文件坏掉（不是 JSON、
+没有 `version` / 不是 1、`hooks` 不是数组）只跳过该文件并 warn，保留该层上一份有效配置；
+单条坏 hook（缺 `id`、未知事件、非法 regex、事件不支持的 match 维度或 action、`.ts` 模块）
+只跳过该条并 warn，兄弟条目照常工作。
 
 ### 匹配
 
@@ -316,8 +326,8 @@ export default async (ctx) => {
 ```
 
 默认导出就是 hook：`(ctx) => outcome | void | Promise<…>`。路径相对**声明它的 hooks 文件
-所在目录**（`.dsh/hooks.json` 里写 `hooks/format.mjs`），只认 `.mjs` / `.js`；`.ts` 需要
-先编译，本版不做。
+所在目录**（`.dsh/hooks.json` 里写 `hooks/format.mjs`），只认 `.mjs` / `.js`；扩展名大小写
+不敏感（`.MJS` / `.Js` 等价），`.ts` 需要先编译，本版不做。
 
 `ctx` 就是全部可用的东西，没有别的：
 
@@ -494,6 +504,31 @@ deny 本次调用，`tool.post` 的 halt 同时把该结果变成错误，模型
 - 想要**跨项目的通知汇总 / 审计面板**、不想让 hook 影响 agent 循环 → 第三方 `dsh-hooks`。
 - 手上已有 `.claude/settings.json` 的 hooks，需要它们继续跑 → `@deepseek-ai/dsh-hooks-claude-code`；
   本插件**故意**不复用 `hook/*` 事件，两者可以同时安装，但不要为同一条规则配两遍。
+
+## Windows
+
+本插件的 hooks 语义不区分平台：发现、匹配、合并、审计在三层配置上完全一样。原生 Windows
+上只有两件事不同——宿主 shell 是 pwsh，Windows 编辑器会给 hooks 文件加 BOM——两件都已处理：
+
+- **`run.command` 由宿主 shell 执行**：POSIX 上是 sh/bash，Windows 上是 pwsh。命令要按平台
+  写，插件**不翻译**方言：bash 的 `&&`、`$(...)`、`2>/dev/null`、单引号引用在 pwsh 里不保证
+  等价，README 也不承诺 bash 语法能在 pwsh 下跑。跨平台脚本写成 `node .dsh/hooks/xxx.mjs`
+  （两种 shell 都能起 node），或者直接用 `module` handler。
+- **`match.tool` 写宿主实际挂载的工具名**：POSIX 上是 `bash`，Windows 上是 `pwsh`（dsh 在
+  win32 上禁用 tool-bash、启用 tool-pwsh）。只写 `bash` 的条目在 Windows 上永远不触发；
+  共享仓库写 `"bash|pwsh"`，`match.args.command` 的正则按两种方言各写一条。`match.args`
+  的其它字段（`workdir` 等）与平台无关。
+- **hooks 文件按 BOM 解码**：UTF-8（可带 BOM）、UTF-16 LE（`FF FE`）、UTF-16 BE（`FE FF`）
+  都接受，无 BOM 按 UTF-8。所以 Notepad 与 PowerShell 5 的 `>` 重定向保存出的文件能直接
+  加载；解不成 JSON 时仍只 warn 并保留该层上一份有效配置。UTF-16 **无 BOM** 的文件无法
+  识别，按 UTF-8 解码失败后同样落到这条 warn。
+- **module 扩展名大小写不敏感**：`.MJS` / `.Js` 与 `.mjs` / `.js` 等价（Windows 文件系统
+  不区分大小写）；`.ts` / `.TS` 仍然不接受。
+- 文件锁、长路径、沙箱与 pwsh 工具本身由宿主负责（见[不在范围内](#不在范围内)）；本插件只
+  消费宿主给的 shell 与文件工具，不自己探测平台。
+
+测试侧同样只认宿主实际挂载的工具：需要真 shell 的集成测试在原生 Windows 上显式 skip（本仓
+测试骨架还没有 pwsh 栈），纯文本判定（匹配、payload、格式）在 Linux CI 上照常覆盖。
 
 ## 已接受的盲区
 

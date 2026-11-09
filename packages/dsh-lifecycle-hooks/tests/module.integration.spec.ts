@@ -11,9 +11,9 @@
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { access, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, expect, it } from 'vitest'
 import { createHooksFixture } from './support/fixture.ts'
-import { requestText, textResponse, toolCallResponse } from './support/harness.ts'
+import { describeBash, requestText, textResponse, toolCallResponse } from './support/harness.ts'
 import {
   bashToolCall,
   hookRunRecords,
@@ -37,7 +37,7 @@ function lastToolResultText(request: GenerateOptions): string {
   return last.content.map(block => block.type === 'text' ? block.text : '').join('')
 }
 
-describe('a module hook on tool.pre', () => {
+describeBash('a module hook on tool.pre', () => {
   it('denies the call with the outcome its default export returns', async () => {
     const root = await fixture.repo()
     await writeHookModule(root, '.dsh/hooks/gate.mjs', `
@@ -75,7 +75,7 @@ export default (ctx) => ({
   })
 })
 
-describe('a module at tool.pre that asks for approval', () => {
+describeBash('a module at tool.pre that asks for approval', () => {
   it('reaches the host approval flow through the shared outcome codec', async () => {
     const root = await fixture.repo()
     await writeHookModule(root, '.dsh/hooks/confirm.mjs', `
@@ -111,7 +111,7 @@ export default (ctx) => ({
   })
 })
 
-describe('a module hook on tool.post', () => {
+describeBash('a module hook on tool.post', () => {
   it('runs a formatter through exec and injects a notice for the next request', async () => {
     const root = await fixture.repo()
     // A local stand-in for a formatter: it rewrites the file it is given, so
@@ -164,7 +164,7 @@ export default async (ctx) => {
   })
 })
 
-describe('a module that is edited between events', () => {
+describeBash('a module that is edited between events', () => {
   it('loads the new version on the next event instead of the cached one', async () => {
     const root = await fixture.repo()
     const gate = (version: string): string => `
@@ -200,7 +200,7 @@ export default (ctx) => ({ action: 'deny', reason: 'gate version ${version} deni
   })
 })
 
-describe('a module that outlives its timeout', () => {
+describeBash('a module that outlives its timeout', () => {
   it('fails the run and disables inject, steer, and exec afterwards', async () => {
     const root = await fixture.repo()
     // The module ignores the timeout on purpose: it writes down what its
@@ -266,7 +266,7 @@ export default async (ctx) => {
   })
 })
 
-describe('a module that cannot be loaded', () => {
+describeBash('a module that cannot be loaded', () => {
   it('treats a missing file as a run failure and applies onFailure: block', async () => {
     const root = await fixture.repo()
     await writeHooks(root, [
@@ -318,7 +318,7 @@ export const notTheHook = true
   })
 })
 
-describe('the curated module context', () => {
+describeBash('the curated module context', () => {
   it('exposes the hook API and the entry facts, and routes log through the host logger', async () => {
     const root = await fixture.repo()
     await writeHookModule(root, '.dsh/hooks/inspect.mjs', `
@@ -395,7 +395,7 @@ export default async (ctx) => {
   })
 })
 
-describe('a module handler on other outcome shapes', () => {
+describeBash('a module handler on other outcome shapes', () => {
   it('blocks the tool result with the outcome a module returns', async () => {
     const root = await fixture.repo()
     await writeHookModule(root, '.dsh/hooks/withhold.mjs', `
@@ -540,7 +540,7 @@ export default async (ctx) => {
   })
 })
 
-describe('a module that is created after its first failure', () => {
+describeBash('a module that is created after its first failure', () => {
   it('starts working on the next event once the file exists', async () => {
     const root = await fixture.repo()
     await writeHooks(root, [moduleHook('late', 'hooks/late.mjs', { match: { tool: 'bash' } })])
@@ -573,7 +573,7 @@ export default (ctx) => ({ action: 'deny', reason: 'late module denied ' + ctx.t
   })
 })
 
-describe('a module timeout inherited from the row config', () => {
+describeBash('a module timeout inherited from the row config', () => {
   it('uses defaultTimeoutMs when the entry declares no own timeout', async () => {
     const root = await fixture.repo()
     await writeHookModule(root, '.dsh/hooks/slow.mjs', `
@@ -600,7 +600,7 @@ export default async () => {
   })
 })
 
-describe('a module outcome the event does not support', () => {
+describeBash('a module outcome the event does not support', () => {
   it('warns, ignores the action, and keeps the module’s context', async () => {
     const root = await fixture.repo()
     await writeHookModule(root, '.dsh/hooks/pre-only.mjs', `
@@ -634,7 +634,7 @@ export default () => ({
   })
 })
 
-describe('a module returning something that is not an outcome', () => {
+describeBash('a module returning something that is not an outcome', () => {
   it('fails the run with the shared outcome-validation message', async () => {
     const root = await fixture.repo()
     await writeHookModule(root, '.dsh/hooks/bare.mjs', `

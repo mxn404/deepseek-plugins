@@ -5,6 +5,10 @@
  * adapter. Nothing in the plugin's own seams is mocked; assertions read the
  * messages the model actually received, whether a tool really ran, and the
  * plugin records the Session retained.
+ *
+ * Native Windows has no real bash stack here (dsh mounts `tool-pwsh` instead
+ * and this repo mounts no pwsh stack yet), so a block that needs a real shell
+ * uses `describeBash` and is skipped there instead of failing on a missing tool.
  */
 
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -24,7 +28,7 @@ import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import * as ToolBash from '@deepseek-ai/dsh-tool-bash'
 import * as ToolFs from '@deepseek-ai/dsh-tool-fs'
 import * as ToolJobs from '@deepseek-ai/dsh-tool-jobs'
-import { vi } from 'vitest'
+import { describe, vi } from 'vitest'
 import * as DshLifecycleHooks from '../../src/index.ts'
 import { MockAdapter } from './mock-adapter.ts'
 import { dshHomeOf } from './project.ts'
@@ -81,7 +85,11 @@ export interface AgentSessionMeta {
 
 /** Optional real-service stacks a test wants mounted next to the plugin. */
 export interface HooksHarnessOptions {
-  /** Mount the real bash tool stack (jobs, subprocess, shell env, executor, tool). */
+  /**
+   * Mount the real bash tool stack (jobs, subprocess, shell env, executor, tool).
+   * POSIX only: native Windows has no bash tool, so a block that needs this
+   * stack uses {@link describeBash} and never reaches this option there.
+   */
   readonly bash?: boolean
   /**
    * Mount the real approval service (`ctx.approval`), so a `tool.pre` `ask`
@@ -95,6 +103,29 @@ export interface HooksHarnessOptions {
    * Every harness stubs the env so a test never reads the developer's real home.
    */
   readonly dshHome?: string
+}
+
+/**
+ * Whether this machine can mount the real bash tool stack.
+ *
+ * Native Windows has no `tool-bash`: dsh mounts `tool-pwsh` there instead, and
+ * this repo's harness does not mount a pwsh stack yet. A block that drives a
+ * real shell — a `bash` tool call, a `command` hook, or a module `exec` — must
+ * use {@link describeBash}, so it is reported as skipped with a stated reason
+ * instead of failing on a missing tool. Pure-text behaviour (matching, payload
+ * shape, the hooks format) keeps plain `describe` and runs on every platform.
+ */
+export const hasBashStack = process.platform !== 'win32'
+
+/**
+ * `describe` for one block that needs the real bash tool stack.
+ *
+ * The whole block is skipped off POSIX (see {@link hasBashStack}). The skip is
+ * deliberate and visible in the runner's skipped count: a missing shell must
+ * never turn into a silent pass.
+ */
+export function describeBash(name: string, body: () => void): void {
+  describe.skipIf(!hasBashStack)(name, body)
 }
 
 /**
@@ -120,6 +151,12 @@ export async function createHooksHarness(
   if (options.approval === true) await ctx.plugin(ApprovalService, { policy: 'ask' })
   await ctx.plugin(ToolFs)
   if (options.bash === true) {
+    // A block that got here without skipping has a real bug: there is no bash
+    // tool to call on this platform, so a mounted-but-missing stack would fail
+    // later with a confusing tool-lookup error. Fail here with the fix instead.
+    if (!hasBashStack) {
+      throw new Error('the real bash tool stack is not available on this platform; gate the block with describeBash')
+    }
     await ctx.plugin(LocalJobRegistry)
     await ctx.plugin(ToolJobs)
     await ctx.plugin(LocalSubprocessRuntime)

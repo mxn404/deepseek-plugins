@@ -12,7 +12,7 @@ import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createHooksFixture } from './support/fixture.ts'
-import { requestText, textResponse, toolCallResponse } from './support/harness.ts'
+import { describeBash, requestText, textResponse, toolCallResponse } from './support/harness.ts'
 import {
   commandHook,
   hookRunRecords,
@@ -48,7 +48,7 @@ function occurrences(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1
 }
 
-describe('session.start', () => {
+describeBash('session.start', () => {
   it('puts the merged context in the first model request, in configuration order', async () => {
     const root = await fixture.repo()
     await writeHooks(root, [
@@ -133,7 +133,7 @@ if (context) {
   })
 })
 
-describe('session.start illegal actions', () => {
+describeBash('session.start illegal actions', () => {
   it('ignores a halt and still runs the hooks behind it', async () => {
     const root = await fixture.repo()
     await writeHookScript(root, '.dsh/hooks/loud.mjs', nodeScript(`
@@ -162,7 +162,7 @@ emit({ action: 'halt', reason: 'session.start has nothing to halt' })
   })
 })
 
-describe('step.start match.prompt', () => {
+describeBash('step.start match.prompt', () => {
   it('separates a submitted prompt from a tool-continuation step', async () => {
     const root = await fixture.repo()
     await writeFileIn(root, 'note.txt', 'NOTE-CONTENT\n')
@@ -236,7 +236,7 @@ emit({ action: 'context', context: [ok ? 'STEP-PAYLOAD-OK' : 'BROKEN: ' + JSON.s
   })
 })
 
-describe('step.start deny', () => {
+describeBash('step.start deny', () => {
   it('rejects a prompt containing a configured keyword before the model sees it', async () => {
     const root = await fixture.repo()
     await writeHookScript(root, '.dsh/hooks/gate.mjs', nodeScript(`
@@ -350,7 +350,7 @@ describe('step.start halt', () => {
   })
 })
 
-describe('step.start failure policy', () => {
+describeBash('step.start failure policy', () => {
   it('denies the step when a failing hook asked to block', async () => {
     const root = await fixture.repo()
     await writeHookScript(root, '.dsh/hooks/broken.mjs', nodeScript('process.exit(1)'))
